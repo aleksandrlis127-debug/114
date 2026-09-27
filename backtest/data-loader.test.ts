@@ -1,5 +1,5 @@
-import { describe, it, expect, vi } from 'vitest';
-import { paginateDerivHistory } from './data-loader';
+import { describe, it, expect, vi, afterEach } from 'vitest';
+import { paginateDerivHistory, getDerivWsUrls } from './data-loader';
 import type { Candle } from '@/types/domain';
 
 function makeCandle(time: number): Candle {
@@ -67,7 +67,13 @@ describe('paginateDerivHistory', () => {
     expect(result.candles.length).toBeGreaterThan(100);
   });
 
-  it('gives up after 3 consecutive empty batches (real end of history, not a weekend)', async () => {
+  // БАГ (найден в этой сессии, тот же класс, что баг 3/4): guard — это
+  // предположение "дальше данных нет", а не доказательство. Раньше этот
+  // тест ожидал truncated=false, хотя startSec=0 здесь НЕ достигнут (данные
+  // обрываются на endTime далеко выше 0) — то есть сдача по guard'у молча
+  // маскировала бы реальную нехватку истории точно так же, как раньше
+  // маскировал iteration cap (баг 3).
+  it('gives up after 3 consecutive empty batches (real end of history, not a weekend) and reports truncated=true', async () => {
     const fromMs = 0;
     const toMs = 2_000_000 * 1000;
     let calls = 0;
@@ -76,10 +82,11 @@ describe('paginateDerivHistory', () => {
       if (calls === 1) return Promise.resolve({ batch: makeBatch(endTime, 50), fromCache: false });
       // Три пустых батча подряд (~6.75 суток без единой свечи, 3×54ч) — это
       // уже не обычные форекс-выходные или праздники, а признак настоящего
-      // конца истории.
+      // конца истории. Но мы это лишь ПРЕДПОЛАГАЕМ, не проверив; startSec=0
+      // здесь так и не достигнут — значит, это truncated.
       return Promise.resolve({ batch: [], fromCache: false });
     });
-    expect(result.truncated).toBe(false);
+    expect(result.truncated).toBe(true);
     expect(calls).toBe(4); // 1 реальный + 3 пустых подряд, затем сдаёмся
     expect(result.candles.length).toBe(50);
   });
@@ -147,7 +154,12 @@ describe('paginateDerivHistory', () => {
     }
   });
 
-  it('stops on the no-progress guard (legitimate stop, not truncated)', async () => {
+  // Guard/предохранитель — это предположение, а не доказательство полноты
+  // истории: раньше он молча помечал результат как truncated=false, что
+  // маскирует именно тот сценарий, для которого этот тест написан (баг 2 —
+  // протухший/повреждённый кэш-хит отдаёт прежнюю страницу вместо новой).
+  // Теперь он честно помечается как truncated=true.
+  it('stops on the no-progress guard and reports truncated=true (guard is not proof of completeness)', async () => {
     const fromMs = 0;
     const toMs = 1_000 * 1000;
     let calls = 0;
@@ -161,8 +173,27 @@ describe('paginateDerivHistory', () => {
       // страницу вместо новой (см. баг 2 в этом же проекте).
       return Promise.resolve({ batch: [makeCandle(1000)], fromCache: false });
     });
-    expect(result.truncated).toBe(false);
+    expect(result.truncated).toBe(true);
     expect(calls).toBe(2);
+  });
+
+  // Edge-случай, вскрытый при переносе этого фикса из соседней ветки: если
+  // последний непустой батч даёт oldest РОВНО startSec+1, явная ветка
+  // "oldest <= startSec" не срабатывает, но endTime после декремента как раз
+  // равен startSec, и внешний while естественно завершает цикл БЕЗ явного
+  // break. Это тоже полное покрытие диапазона (потерян максимум один
+  // пограничный тик) — должно остаться truncated=false, а не ложно
+  // штамповаться как guard.
+  it('treats oldest === startSec + 1 as reaching the start (natural loop exit, not truncated)', async () => {
+    const fromMs = 1000; // startSec = 1
+    const toMs = 100_000;
+    const result = await paginateDerivHistory({ symbol: 'EURUSD', fromMs, toMs }, (endTime) => {
+      // Один батч сразу доходит до oldest=2 (startSec+1) и покрывает весь
+      // остаток диапазона одним запросом.
+      return Promise.resolve({ batch: makeBatch(endTime, endTime - 1), fromCache: false });
+    });
+    expect(result.truncated).toBe(false);
+    expect(result.candles[0].time).toBe(2);
   });
 
   // Регрессия на баг 3: MAX_DERIV_ITERATIONS срабатывал раньше, чем любое из
@@ -220,5 +251,40 @@ describe('paginateDerivHistory', () => {
       },
     );
     expect(result.truncated).toBe(false);
+  });
+});
+
+// BUGFIX (реальный прогон 2026-09-27, лог GBPUSD): ws.derivws.com уже
+// диагностирован как 100%-недоступный с этой сети, но пробовался первым на
+// каждой странице — лишние ретраи на каждый запрос. BACKTEST_SKIP_DERIV_HOSTS
+// позволяет пропустить заведомо мёртвый хост без изменения общего
+// providers.config.ts (используется живым приложением тоже).
+describe('getDerivWsUrls', () => {
+  const ORIGINAL_ENV = process.env.BACKTEST_SKIP_DERIV_HOSTS;
+
+  afterEach(() => {
+    if (ORIGINAL_ENV === undefined) delete process.env.BACKTEST_SKIP_DERIV_HOSTS;
+    else process.env.BACKTEST_SKIP_DERIV_HOSTS = ORIGINAL_ENV;
+  });
+
+  it('returns all configured hosts when the env var is unset (default, unchanged behavior)', () => {
+    delete process.env.BACKTEST_SKIP_DERIV_HOSTS;
+    const urls = getDerivWsUrls();
+    expect(urls.length).toBeGreaterThanOrEqual(2);
+    expect(urls.some((u) => u.includes('ws.derivws.com'))).toBe(true);
+    expect(urls.some((u) => u.includes('api.derivws.com'))).toBe(true);
+  });
+
+  it('filters out a host matched by BACKTEST_SKIP_DERIV_HOSTS', () => {
+    process.env.BACKTEST_SKIP_DERIV_HOSTS = 'ws.derivws.com';
+    const urls = getDerivWsUrls();
+    expect(urls.some((u) => u.includes('ws.derivws.com'))).toBe(false);
+    expect(urls.some((u) => u.includes('api.derivws.com'))).toBe(true);
+  });
+
+  it('falls back to the full list if the filter would remove every host (typo safety)', () => {
+    process.env.BACKTEST_SKIP_DERIV_HOSTS = 'derivws.com'; // matches both хоста
+    const urls = getDerivWsUrls();
+    expect(urls.length).toBeGreaterThanOrEqual(2);
   });
 });

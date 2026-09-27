@@ -24,12 +24,42 @@ const BINANCE_REST = 'https://api.binance.com';
 // побочных эффектов при импорте, поэтому список хостов из него безопасно
 // переиспользовать напрямую, а app_id брать из process.env (Node-эквивалент
 // import.meta.env.VITE_DERIV_APP_ID для CLI-скриптов) с фолбэком на дефолт.
-function getDerivWsUrls(): string[] {
+// BUGFIX (реальный прогон 2026-09-27, лог GBPUSD): ws.derivws.com уже
+// диагностирован как 100%-недоступный с этой сети (см. комментарий у
+// EMPTY_BATCH_SKIP_SECONDS ниже), но fetchDerivBatchWithFallback всё равно
+// пробует его ПЕРВЫМ на КАЖДОЙ странице (см. getDerivWsUrls/PROVIDERS_CONFIG
+// ниже) — то есть каждый запрос гарантированно тратит RETRY_ATTEMPTS
+// попыток на заведомо мёртвый хост, прежде чем дойти до рабочего
+// api.derivws.com. За ~230 страниц на один только EURUSD это заметная лишняя
+// нагрузка на сеть/на рабочий хост, и вероятный вклад в последующий обрыв
+// GBPUSD (оба хоста отказали в течение ~30с бэкоффа при исчерпании
+// MAX_CONSECUTIVE_FETCH_ERRORS). НЕ меняем порядок/список хостов в
+// providers.config.ts — это общий конфиг живого приложения (src/data/
+// sources/deriv.ts), и то, что ws.derivws.com недоступен именно с ЭТОЙ сети,
+// не факт для всех сетей/пользователей, чтобы жёстко зашивать это глобально.
+// Вместо этого — опциональный, по умолчанию НЕ включённый флаг именно для
+// backtest-скрипта: `BACKTEST_SKIP_DERIV_HOSTS=ws.derivws.com` (через запятую
+// для нескольких) пропускает совпадающие хосты при построении списка URL.
+export function getDerivWsUrls(): string[] {
   const appId = encodeURIComponent(process.env.VITE_DERIV_APP_ID?.trim() || PROVIDERS_CONFIG.deriv.defaultAppId);
   const noAppId: readonly number[] = PROVIDERS_CONFIG.deriv.wsEndpointsNoAppId ?? [];
-  return PROVIDERS_CONFIG.deriv.wsEndpoints.map((base, i) =>
+  const urls = PROVIDERS_CONFIG.deriv.wsEndpoints.map((base, i) =>
     noAppId.includes(i) ? base : `${base}?app_id=${appId}`,
   );
+  const skip = (process.env.BACKTEST_SKIP_DERIV_HOSTS ?? '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
+  if (skip.length === 0) return urls;
+  const filtered = urls.filter((u) => !skip.some((host) => u.includes(host)));
+  // Не оставляем список пустым по невнимательности (опечатка в env-значении
+  // ведь может совпасть со ВСЕМИ хостами) — тогда лучше вернуться к полному
+  // списку и вывести предупреждение, чем упасть без единого доступного хоста.
+  if (filtered.length === 0) {
+    console.warn(`  [Deriv] BACKTEST_SKIP_DERIV_HOSTS исключил все хосты — игнорирую фильтр`);
+    return urls;
+  }
+  return filtered;
 }
 // Deriv ticks_history accepts count up to 5000 — 5× more data per request
 // than the previous 1000. Verified: the API does not silently truncate.
@@ -231,6 +261,16 @@ export async function paginateDerivHistory(
   let truncated = false;
   let consecutiveEmptyBatches = 0;
   let consecutiveFetchErrors = 0;
+  // Единственное состояние, которое доказывает полноту истории — реально
+  // дошедший до startSec самый старый полученный батч (reachedStart=true).
+  // Любой guard/предохранитель (iteration cap / consecutive-empty /
+  // no-progress) — это ПРЕДПОЛОЖЕНИЕ, что дальше данных нет, а не
+  // доказательство: раньше (см. баг 3/4 в этом же проекте) truncated
+  // выставлялся только по iteration cap, из-за чего два других guard'а
+  // молча сообщали truncated=false, даже не дойдя до startSec. Тот же класс
+  // бага здесь воспроизвёлся в третий раз для нового
+  // consecutiveEmptyBatches guard'а — фиксируем единообразно.
+  let reachedStart = false;
 
   while (endTime > startSec && iterations < MAX_DERIV_ITERATIONS) {
     iterations++;
@@ -277,6 +317,7 @@ export async function paginateDerivHistory(
     }
 
     if (oldest <= startSec) {
+      reachedStart = true;
       console.log(`  [Deriv] stopping: reached start boundary at iteration ${iterations} (oldest=${oldest}, start=${startSec})`);
       break;
     }
@@ -294,9 +335,25 @@ export async function paginateDerivHistory(
     endTime = oldest - 1;
   }
 
+  // Edge-случай: если последний непустой батч дал oldest === startSec + 1,
+  // явная ветка выше (oldest <= startSec) не сработает, но endTime = oldest -
+  // 1 = startSec, и внешний while-цикл естественно завершится по условию
+  // `endTime > startSec` — это ТОЖЕ полное покрытие диапазона (потерян
+  // максимум один пограничный тик), а не guard. Учитываем отдельно, чтобы не
+  // штамповать ложный truncated=true на почти-идеальном результате.
+  if (!reachedStart && endTime <= startSec) {
+    reachedStart = true;
+  }
+
   if (iterations >= MAX_DERIV_ITERATIONS) {
     truncated = true;
     console.log(`  [Deriv] stopping: hit iteration cap (${MAX_DERIV_ITERATIONS}) — history is INCOMPLETE, oldest fetched candle did not reach start boundary`);
+  } else if (!reachedStart) {
+    // Цикл завершился НЕ через подтверждённое достижение startSec — это
+    // guard (consecutive-empty / no-progress), а не доказанная полнота
+    // истории.
+    truncated = true;
+    console.log(`  [Deriv] stopping: history incomplete — did not reach requested start (${startSec}), stopped at endTime=${endTime}`);
   }
 
   console.log(`  [Deriv] finished after ${iterations} iterations, ${allCandles.length} candles (${pagesFromCache} page(s) from disk cache, ${pagesFetched} fetched over network)${truncated ? ' [TRUNCATED]' : ''}`);

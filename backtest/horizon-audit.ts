@@ -1281,34 +1281,49 @@ export async function main(): Promise<void> {
       continue;
     }
 
-    console.log(`\nLoading 1m history for ${symbolId}...`);
-    const { candles: candles1m, truncated: historyTruncated } = await loadHistory({ symbol: symbolId, fromMs, toMs });
-    console.log(`  ${symbolId}: ${candles1m.length} 1m candles${historyTruncated ? ' [TRUNCATED]' : ''}`);
+    // BUGFIX (реальный прогон 2026-09-27, лог GBPUSD): loadHistory() может
+    // пробросить ошибку после исчерпания MAX_CONSECUTIVE_FETCH_ERRORS
+    // (реальный сетевой обрыв, не выходные) — раньше это падало через весь
+    // for-цикл наружу в main(), убивая ВЕСЬ многочасовой прогон, включая
+    // символы, до которых очередь ещё не дошла (USDJPY/AUDUSD), хотя EURUSD
+    // к этому моменту уже был полностью и успешно собран. Один сбойный
+    // символ не должен стоить остальных трёх. Отчёт честно отражает
+    // проваленный символ (candles1m=0, truncated=true), а не молчит о нём.
+    try {
+      console.log(`\nLoading 1m history for ${symbolId}...`);
+      const { candles: candles1m, truncated: historyTruncated } = await loadHistory({ symbol: symbolId, fromMs, toMs });
+      console.log(`  ${symbolId}: ${candles1m.length} 1m candles${historyTruncated ? ' [TRUNCATED]' : ''}`);
 
-    if (candles1m.length < 500) {
-      console.warn(`  ${symbolId}: skipping — not enough 1m candles (need at least 500)`);
-      perSymbolCandleCounts.push({ symbolId, candles1m: candles1m.length, candlesResampled: 0, truncated: historyTruncated });
-      continue;
-    }
+      if (candles1m.length < 500) {
+        console.warn(`  ${symbolId}: skipping — not enough 1m candles (need at least 500)`);
+        perSymbolCandleCounts.push({ symbolId, candles1m: candles1m.length, candlesResampled: 0, truncated: historyTruncated });
+        continue;
+      }
 
-    const candles = resample(candles1m, timeframe);
-    console.log(`  ${symbolId}: ${candles.length} ${timeframe} candles after resampling`);
+      const candles = resample(candles1m, timeframe);
+      console.log(`  ${symbolId}: ${candles.length} ${timeframe} candles after resampling`);
 
-    if (candles.length < 200) {
-      console.warn(`  ${symbolId}: skipping — not enough resampled candles (need at least 200)`);
+      if (candles.length < 200) {
+        console.warn(`  ${symbolId}: skipping — not enough resampled candles (need at least 200)`);
+        perSymbolCandleCounts.push({ symbolId, candles1m: candles1m.length, candlesResampled: candles.length, truncated: historyTruncated });
+        continue;
+      }
+
       perSymbolCandleCounts.push({ symbolId, candles1m: candles1m.length, candlesResampled: candles.length, truncated: historyTruncated });
+      totalCandles1m += candles1m.length;
+      totalCandlesResampled += candles.length;
+
+      console.log(`  ${symbolId}: running detectors on ${candles.length - maxExpiry - args.windowSize} bars...`);
+      const occs = buildOccurrences(candles, symbolId, activeFeatures, config, args.windowSize, maxExpiry);
+      await writeCache(cacheKey, occs, { candles1m: candles1m.length, candlesResampled: candles.length, truncated: historyTruncated });
+      console.log(`  ${symbolId}: ${occs.length} occurrences (calculated)`);
+      allOccurrences.push(...occs);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      console.error(`  ${symbolId}: FAILED to load/process history (${message}) — skipping this symbol and continuing with the rest`);
+      perSymbolCandleCounts.push({ symbolId, candles1m: 0, candlesResampled: 0, truncated: true });
       continue;
     }
-
-    perSymbolCandleCounts.push({ symbolId, candles1m: candles1m.length, candlesResampled: candles.length, truncated: historyTruncated });
-    totalCandles1m += candles1m.length;
-    totalCandlesResampled += candles.length;
-
-    console.log(`  ${symbolId}: running detectors on ${candles.length - maxExpiry - args.windowSize} bars...`);
-    const occs = buildOccurrences(candles, symbolId, activeFeatures, config, args.windowSize, maxExpiry);
-    await writeCache(cacheKey, occs, { candles1m: candles1m.length, candlesResampled: candles.length, truncated: historyTruncated });
-    console.log(`  ${symbolId}: ${occs.length} occurrences (calculated)`);
-    allOccurrences.push(...occs);
   }
 
   const gateFunnel: Record<string, number> | undefined = args.funnel
