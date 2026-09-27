@@ -178,6 +178,29 @@ function parseKlineRow(row: unknown): Candle {
 const EMPTY_BATCH_SKIP_SECONDS = 3 * 24 * 60 * 60; // 3 суток
 const MAX_CONSECUTIVE_EMPTY_BATCHES = 3;
 
+// BUGFIX (реальный прогон 2026-09-27, обрыв на итерации ~125 при загрузке
+// EURUSD): fetchDerivBatchWithFallback уже переживает недоступность
+// ws.derivws.com (100% отказ с этой сети) через фолбэк на api.derivws.com
+// с собственным бюджетом ретраев на каждый хост (fetchWithRetry). Но если
+// ОБА хоста исчерпали попытки на одном конкретном батче — например,
+// из-за секундного сетевого сбоя на линии пользователя посреди
+// многочасового прогона, а не из-за структурной причины вроде выходных —
+// fetchDerivBatchWithFallback пробрасывает ошибку, а paginateDerivHistory
+// её ничем не ловил: один транзиентный сбой ронял ВЕСЬ прогон (часы
+// скачивания истории по нескольким символам), а не только текущий батч.
+// Это отдельная причина от "пустого батча = конец истории" (баг 1,
+// обработан ниже отдельным счётчиком consecutiveEmptyBatches) — сетевая
+// ошибка и легитимный пустой ответ API различимы (catch vs batch.length
+// === 0) и должны обрабатываться раздельно, чтобы не путать "нет данных за
+// этот период" с "не удалось спросить, есть ли данные". Симметрично
+// пустым батчам: даём разумный запас попыток с нарастающим бэкоффом на
+// том же endTime (не прыгаем вперёд/назад — это не про пропуск диапазона,
+// а про "спросить ещё раз, когда сеть отдышится"), сдаёмся только после
+// MAX_CONSECUTIVE_FETCH_ERRORS подряд — тогда это уже не блип, а
+// легитимный повод остановить прогон целиком.
+const FETCH_ERROR_RETRY_BASE_DELAY_MS = 2000;
+const MAX_CONSECUTIVE_FETCH_ERRORS = 5;
+
 export async function paginateDerivHistory(
   options: LoadOptions,
   fetchPage: (endTime: number) => Promise<{ batch: Candle[]; fromCache: boolean }>,
@@ -192,10 +215,30 @@ export async function paginateDerivHistory(
   let pagesFetched = 0;
   let truncated = false;
   let consecutiveEmptyBatches = 0;
+  let consecutiveFetchErrors = 0;
 
   while (endTime > startSec && iterations < MAX_DERIV_ITERATIONS) {
     iterations++;
-    const { batch, fromCache } = await fetchPage(endTime);
+    let batch: Candle[];
+    let fromCache: boolean;
+    try {
+      const page = await fetchPage(endTime);
+      batch = page.batch;
+      fromCache = page.fromCache;
+    } catch (err) {
+      consecutiveFetchErrors++;
+      const message = err instanceof Error ? err.message : String(err);
+      if (consecutiveFetchErrors >= MAX_CONSECUTIVE_FETCH_ERRORS) {
+        console.log(`  [Deriv] giving up after ${consecutiveFetchErrors} consecutive fetch errors at iteration ${iterations} (endTime=${endTime}): ${message} — this looks like a real outage, not a blip`);
+        throw err;
+      }
+      const delayMs = FETCH_ERROR_RETRY_BASE_DELAY_MS * 2 ** (consecutiveFetchErrors - 1);
+      console.log(`  [Deriv] fetch error at iteration ${iterations} (${consecutiveFetchErrors}/${MAX_CONSECUTIVE_FETCH_ERRORS} consecutive, endTime=${endTime}): ${message} — retrying same batch in ${delayMs}ms`);
+      iterations--;
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+      continue;
+    }
+    consecutiveFetchErrors = 0;
     if (fromCache) {
       pagesFromCache++;
     } else {

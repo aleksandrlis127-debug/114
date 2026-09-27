@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { paginateDerivHistory } from './data-loader';
 import type { Candle } from '@/types/domain';
 
@@ -76,6 +76,69 @@ describe('paginateDerivHistory', () => {
     expect(result.truncated).toBe(false);
     expect(calls).toBe(4); // 1 реальный + 3 пустых подряд, затем сдаёмся
     expect(result.candles.length).toBe(50);
+  });
+
+  // BUGFIX (реальный прогон 2026-09-27, обрыв на итерации ~125 при загрузке
+  // EURUSD): один транзиентный сбой fetchPage (оба Deriv-хоста одновременно
+  // исчерпали ретраи на ОДНОМ батче) раньше пробрасывался наружу без единой
+  // попытки повторить — падал весь многочасовой прогон. На старом коде этот
+  // тест падает: paginateDerivHistory пробрасывает ошибку уже на первом же
+  // сбое, не давая шанса на восстановление после трёх, что не то поведение,
+  // какое мы хотим для транзиентного сбоя.
+  it('retries the same batch after transient fetch errors and keeps collecting (not truncated)', async () => {
+    // Настоящий бэкофф (2с/4с/...) реально ждать в юнит-тесте не нужно и не
+    // должно — таймеры подделываем, чтобы проверить именно логику повторов,
+    // а не тратить время прогона тестов на реальные секунды ожидания.
+    vi.useFakeTimers();
+    try {
+      const fromMs = 1_000 * 1000;
+      const toMs = 1_100 * 1000;
+      let calls = 0;
+      const seenEndTimes: number[] = [];
+      const resultPromise = paginateDerivHistory({ symbol: 'EURUSD', fromMs, toMs }, (endTime) => {
+        calls++;
+        seenEndTimes.push(endTime);
+        // Первые 2 попытки — транзиентный сетевой сбой (оба Deriv-хоста
+        // одновременно не ответили на этот конкретный батч); 3-я попытка —
+        // сеть отдышалась, батч приходит нормально.
+        if (calls <= 2) return Promise.reject(new Error('Deriv WS: connection failed'));
+        return Promise.resolve({ batch: makeBatch(endTime, 200), fromCache: false });
+      });
+      await vi.runAllTimersAsync();
+      const result = await resultPromise;
+      expect(calls).toBe(3);
+      // Повторяем ТОТ ЖЕ endTime при сбое — это не пропуск диапазона (как
+      // для пустых батчей), а просто "спросить ещё раз".
+      expect(seenEndTimes[0]).toBe(seenEndTimes[1]);
+      expect(seenEndTimes[1]).toBe(seenEndTimes[2]);
+      expect(result.truncated).toBe(false);
+      expect(result.candles.length).toBeGreaterThan(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('gives up after 5 consecutive fetch errors and rethrows (real outage, not a blip)', async () => {
+    vi.useFakeTimers();
+    try {
+      const fromMs = 1_000 * 1000;
+      const toMs = 1_100 * 1000;
+      let calls = 0;
+      const failure = new Error('Deriv WS: connection failed');
+      const resultPromise = paginateDerivHistory({ symbol: 'EURUSD', fromMs, toMs }, (_endTime) => {
+        calls++;
+        return Promise.reject(failure);
+      });
+      // На отвергнутый промис нужен обработчик ДО того, как таймеры дадут
+      // ему возможность реально отклониться — иначе Node пожалуется на
+      // unhandled rejection в промежутке между стартом и await ниже.
+      const assertion = expect(resultPromise).rejects.toThrow(failure);
+      await vi.runAllTimersAsync();
+      await assertion;
+      expect(calls).toBe(5);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('stops on the no-progress guard (legitimate stop, not truncated)', async () => {
