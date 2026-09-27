@@ -9,9 +9,28 @@ import { generateRandomWalk } from './synthetic/random-walk';
 // Кэш по умолчанию — относительный 'backtest/.cache'; occurrence-cache.test.ts
 // стирает именно его, поэтому этот тест обязан работать в собственном cwd —
 // иначе два тестовых процесса гонялись бы за один и тот же каталог.
+// BUGFIX (Фаза 3, "модель спреда"): раньше мок генерировал BTCUSDT/ETHUSDT
+// на дефолтном форекс-масштабе цены generateRandomWalk (startPrice=1.1,
+// sigma=0.0001) — тогда как buildOccurrences теперь тянет реальный
+// static-спред символа из estimateSpread() (BTCUSDT=0.5, ETHUSDT=0.3,
+// крипто-масштаб цены в тысячах/десятках тысяч). При форекс-масштабной
+// цене этот спред в тысячи раз больше любого движения одного бара — НИ
+// ОДИН исход не мог решиться (0 decided из 0 ok-строк, см. регресс
+// "expected 0 to be greater than 0"). startPrice/sigma здесь заданы в
+// реалистичном для этих символов масштабе (сохраняя ту же относительную
+// волатильность ~0.009%/бар, что и форекс-дефолт), чтобы спред снова был
+// малой долей типичного движения — как в реальной жизни, а не доминировал
+// над ним.
 vi.mock('./data-loader', () => ({
   loadHistory: ({ symbol }: { symbol: string }) =>
-    Promise.resolve({ candles: generateRandomWalk({ bars: 7000, seed: symbol === 'BTCUSDT' ? 11 : 12, noiseFraction: 0.15 }), truncated: false }),
+    Promise.resolve({
+      candles: generateRandomWalk(
+        symbol === 'BTCUSDT'
+          ? { bars: 7000, seed: 11, noiseFraction: 0.15, startPrice: 60000, sigma: 60, tick: 1 }
+          : { bars: 7000, seed: 12, noiseFraction: 0.15, startPrice: 3000, sigma: 3, tick: 0.1 },
+      ),
+      truncated: false,
+    }),
 }));
 
 import { main } from './horizon-audit';

@@ -68,6 +68,7 @@ import { computeIndicatorSeriesRaw, snapshotFromSeries } from '@/compute/Indicat
 import { readCache, writeCache, type CacheKey } from './occurrence-cache';
 import { computeStructure } from '@/compute/indicators/trend-structure';
 import { calcSmartMoney } from '@/compute/indicators/smart-money';
+import { estimateSpread } from '@/decision/spread-estimate';
 import { timeframeSchema, ALL_FEATURES, DEFAULT_INDICATOR_CONFIG, patternNameSchema } from '@/types/domain';
 import type { Candle, Timeframe, PatternName, SignalDirection, FeatureName } from '@/types/domain';
 
@@ -388,6 +389,23 @@ export interface PoolMeta {
 // ОБЯЗАНО сопровождаться инкрементом.
 
 
+// Извлечено из тела buildOccurrences (Фаза 3, "модель спреда") — чистая
+// функция, зеркальная src/decision/apply-spread.ts::applySpreadToOutcome,
+// но возвращающая доменную модель backtest'а (1/-1/0), а не
+// SignalOutcome/'timeout'. move <= spread → тай (0), как и в живом/демо-пути
+// (см. BUGFIX-комментарий у вызова estimateSpread() в buildOccurrences ниже).
+export function resolveBinaryOutcome(
+  entryClose: number,
+  expiryClose: number,
+  direction: SignalDirection,
+  spread: number,
+): number {
+  const move = Math.abs(expiryClose - entryClose);
+  if (move <= spread) return 0;
+  const win = direction === 'buy' ? expiryClose > entryClose : expiryClose < entryClose;
+  return win ? 1 : -1;
+}
+
 export function buildOccurrences(
   candles: Candle[],
   symbolId: string,
@@ -420,6 +438,21 @@ export function buildOccurrences(
   // 24/7, а getSessionRegime() размечает 'closed'/'sydney'/'tokyo' по
   // форекс-календарю. См. PatternContext.sessionAgnostic в pattern-context.ts.
   const sessionAgnostic = isCrypto(symbolId);
+  // BUGFIX (Фаза 3, "модель спреда для бинарного контракта"): раньше исход
+  // здесь считался по голому знаку разницы close (тай — только при
+  // ТОЧНОМ равенстве цен, что на реальных котировках почти никогда не
+  // случается). Живой/демо-путь (src/decision/apply-spread.ts::
+  // applySpreadToOutcome, src/stores/useDemoAccountStore.ts::resolveTrade)
+  // считает тай при move <= spread — движение цены, не перекрывающее
+  // спред, не даёт реального выигрыша по бинарному контракту. Backtest,
+  // не моделируя эту зону тай, системно завышал число "решённых" исходов
+  // и, как следствие, точность/значимость паттернов относительно того, что
+  // реально выплатит брокер. Здесь используется тот же estimateSpread()
+  // (со static-таблицей спредов, без live-тика — как в backtest и должно
+  // быть), что и в реальном приложении, чтобы цифры аудита были сравнимы
+  // с реальной выплатой по бинарному опциону, а не только с "движением
+  // в нужную сторону".
+  const spread = estimateSpread(symbolId, null).spread;
 
   for (let i = minStart; i < candles.length - maxExpiry; i++) {
     const progressIdx = i - minStart;
@@ -464,15 +497,7 @@ export function buildOccurrences(
           continue;
         }
         const expiryCandle = candles[i + expiry];
-        const isBuy = p.direction === 'buy';
-        if (expiryCandle.close === entryCandle.close) {
-          outcomes.set(expiry, 0);
-        } else {
-          const win = isBuy
-            ? expiryCandle.close > entryCandle.close
-            : expiryCandle.close < entryCandle.close;
-          outcomes.set(expiry, win ? 1 : -1);
-        }
+        outcomes.set(expiry, resolveBinaryOutcome(entryCandle.close, expiryCandle.close, p.direction, spread));
       }
 
       occurrences.push({
