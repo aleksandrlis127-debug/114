@@ -1,4 +1,5 @@
 import { gate } from './gate-trace';
+import { diagCount } from './diagnostic-trace';
 import type {
   Candle,
   PatternResult,
@@ -218,6 +219,7 @@ export function detectRisingThreeMethods(ctx: ContinuationContext): PatternResul
   const { candles, session, indicators } = ctx;
   const n = candles.length;
   if (n < 5 + TREND_LOOKBACK) return null;
+  gate('rising-three-methods:00-evaluated');
   const idx = n - 5;
   const first = candles[idx];
   const c2 = candles[idx + 1];
@@ -230,10 +232,12 @@ export function detectRisingThreeMethods(ctx: ContinuationContext): PatternResul
   //     Higher Lows), паттерн формируется внутри импульса.
   if (countBullish(candles, idx, TREND_LOOKBACK) < TREND_MIN_COUNT) return null;
   if (!hasPrecedingBullish(candles, idx, TREND_LOOKBACK)) return null;
+  gate('rising-three-methods:01-trend');
 
   // 2.8 Азиатская сессия — запретная зона по методичке ("флет", паттерн
   //     часто ломается), торговать "Три метода" на M1 только в Kill Zones.
   if (isAsiaOrClosed(session, ctx.sessionAgnostic)) return null;
+  gate('rising-three-methods:02-session');
 
   // 2.2 Свеча 1 — длинный бычий импульс: тело >= 60% диапазона, >= 1.5x
   //     среднего тела за 20 свечей, закрытие в верхних 20% диапазона,
@@ -247,17 +251,32 @@ export function detectRisingThreeMethods(ctx: ContinuationContext): PatternResul
   if ((first.high - first.close) / range1 > 0.20) return null;
   const lowerWick1 = Math.min(first.open, first.close) - first.low;
   if (lowerWick1 > 0.10 * range1) return null;
+  gate('rising-three-methods:03-candle1');
 
   // 2.3 Свечи 2-4 — малые (тело <= 40% среднего тела, <= 50% тела свечи 1),
   //     без пробоя High/Low свечи 1 даже тенью (инвалидатор). Направление
   //     тела намеренно не фиксируется хард-фильтром (методичка: "допустимы
   //     разнонаправленные, но чаще медвежьи") — только геометрия/контейнмент.
-  for (const c of consolidation) {
+  for (let k = 0; k < consolidation.length; k++) {
+    const c = consolidation[k];
     const body = Math.abs(c.close - c.open);
-    if (avgBody20 > 0 && body > 0.4 * avgBody20) return null;
-    if (body > 0.5 * body1) return null;
-    if (c.high > first.high || c.low < first.low) return null;
+    if (avgBody20 > 0 && body > 0.4 * avgBody20) {
+      diagCount('rising-three-methods:04-fail-body-vs-avg');
+      diagCount(`rising-three-methods:04-fail-at-candle-${k + 2}`);
+      return null;
+    }
+    if (body > 0.5 * body1) {
+      diagCount('rising-three-methods:04-fail-body-vs-body1');
+      diagCount(`rising-three-methods:04-fail-at-candle-${k + 2}`);
+      return null;
+    }
+    if (c.high > first.high || c.low < first.low) {
+      diagCount('rising-three-methods:04-fail-range-breach');
+      diagCount(`rising-three-methods:04-fail-at-candle-${k + 2}`);
+      return null;
+    }
   }
+  gate('rising-three-methods:04-consolidation');
 
   // 2.4 Свеча 5 — длинная бычья (тело >= 70% диапазона), close строго выше
   //     close(1), тело >= тела свечи 1.
@@ -267,6 +286,7 @@ export function detectRisingThreeMethods(ctx: ContinuationContext): PatternResul
   if (body5 / range5 < 0.7) return null;
   if (last.close <= first.close) return null;
   if (body5 < body1) return null;
+  gate('rising-three-methods:05-candle5');
 
   // 2.5 Объём: свеча 1 > среднего, свечи 2-4 < среднего (истощение
   //     продавцов), свеча 5 > среднего, и — прямая цитата методички из
@@ -283,6 +303,7 @@ export function detectRisingThreeMethods(ctx: ContinuationContext): PatternResul
   if (avgVol4 > 0 && c4.volume >= avgVol4) return null;
   if (avgVol5 > 0 && last.volume <= avgVol5) return null;
   if (last.volume < first.volume) return null; // хард-инвалидатор "volume(5) >= volume(1)"
+  gate('rising-three-methods:06-volume');
 
   // 2.6 RSI(14) должен оставаться > 50 на всей консолидации (2-4) —
   //     обязательный фильтр по методичке, поэтому в отличие от опционального
@@ -298,6 +319,7 @@ export function detectRisingThreeMethods(ctx: ContinuationContext): PatternResul
   const rsi5 = rsiSeries[idx + 4];
   if (rsi2 == null || rsi3 == null || rsi4 == null) return null;
   if (rsi2 <= 50 || rsi3 <= 50 || rsi4 <= 50) return null;
+  gate('rising-three-methods:07-rsi');
 
   // 2.7 Гистограмма MACD(12,26,9) > 0 на свечах 2-4 — обязательный фильтр.
   //     Расширение гистограммы на свече 5 (hist5 > hist4) — мягкий
@@ -310,10 +332,12 @@ export function detectRisingThreeMethods(ctx: ContinuationContext): PatternResul
   const hist4 = macdResult.histogram[idx + 3];
   if (hist2 == null || hist3 == null || hist4 == null) return null;
   if (hist2 <= 0 || hist3 <= 0 || hist4 <= 0) return null;
+  gate('rising-three-methods:08-macd');
 
   // 2.9 Мягкие confluence-фильтры: минимум 6 из 9 реализуемых направлений.
   const filters = buildContinuationFilters(ctx, first, last, 'buy', rsi5);
   if (countPassedFilters(filters) < MIN_FILTERS_REQUIRED) return null;
+  gate('rising-three-methods:09-soft-filters');
 
   // §4 Формула уверенности.
   const extension = body1 > 0 ? body5 / body1 : 1;
@@ -329,6 +353,7 @@ export function detectRisingThreeMethods(ctx: ContinuationContext): PatternResul
     * volatilityBonus,
   );
   if (confidence < 0.5) return null;
+  gate('rising-three-methods:10-confidence');
 
   return {
     name: 'rising-three-methods',
@@ -390,11 +415,24 @@ export function detectFallingThreeMethods(ctx: ContinuationContext): PatternResu
 
   // 2.3 Свечи 2-4 — малые (тело <= 40% среднего тела, <= 50% тела свечи 1),
   //     без пробоя High/Low свечи 1 даже тенью (инвалидатор).
-  for (const c of consolidation) {
+  for (let k = 0; k < consolidation.length; k++) {
+    const c = consolidation[k];
     const body = Math.abs(c.close - c.open);
-    if (avgBody20 > 0 && body > 0.4 * avgBody20) return null;
-    if (body > 0.5 * body1) return null;
-    if (c.high > first.high || c.low < first.low) return null;
+    if (avgBody20 > 0 && body > 0.4 * avgBody20) {
+      diagCount('falling-three-methods:04-fail-body-vs-avg');
+      diagCount(`falling-three-methods:04-fail-at-candle-${k + 2}`);
+      return null;
+    }
+    if (body > 0.5 * body1) {
+      diagCount('falling-three-methods:04-fail-body-vs-body1');
+      diagCount(`falling-three-methods:04-fail-at-candle-${k + 2}`);
+      return null;
+    }
+    if (c.high > first.high || c.low < first.low) {
+      diagCount('falling-three-methods:04-fail-range-breach');
+      diagCount(`falling-three-methods:04-fail-at-candle-${k + 2}`);
+      return null;
+    }
   }
 
   gate('falling-three-methods:04-consolidation');

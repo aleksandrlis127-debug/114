@@ -1,5 +1,6 @@
 import type { Candle, PatternResult, SignalStrength, IndicatorSnapshot } from '@/types/domain';
 import { gate } from './gate-trace';
+import { diagCount } from './diagnostic-trace';
 import { computeStructure } from '@/compute/indicators/trend-structure';
 import { macd } from '@/compute/indicators/macd';
 import type { SessionRegime } from '@/compute/session-regime';
@@ -168,6 +169,8 @@ export function detectMacdDecelerationContinuation(
   const oldSeries: number[] = run.slice(peakIdx);
   if (oldSeries.length < MIN_SERIES_LENGTH) return null;
   gate('macd-deceleration-continuation:04-old-series');
+  // Диагностика (не влияет на поведение): распределение длины хвоста от пика.
+  diagCount(`macd-deceleration-continuation:04-series-len-${oldSeries.length >= 8 ? '8+' : oldSeries.length}`);
 
   // Monotonically decaying magnitude, normalized to a relative step instead
   // of a strict <= (промт-фикс п.5). On M1 the histogram is often tiny and
@@ -175,12 +178,18 @@ export function detectMacdDecelerationContinuation(
   // sequences like 0.00031 -> 0.00030 -> 0.00030 -> 0.00029 pass as
   // "confident decay" when it could just be flat noise.
   for (let i = 1; i < oldSeries.length; i++) {
-    if (Math.abs(oldSeries[i]) > Math.abs(oldSeries[i - 1]) * DECAY_STEP_RATIO) return null;
+    if (Math.abs(oldSeries[i]) > Math.abs(oldSeries[i - 1]) * DECAY_STEP_RATIO) {
+      diagCount(`macd-deceleration-continuation:05-fail-chain-step-${Math.min(i, 6)}`);
+      return null;
+    }
   }
 
   // flipValue continues the old series' decay one more bar (its own
   // magnitude must still be <= the old series' last element).
-  if (Math.abs(flipValue) >= Math.abs(oldSeries[oldSeries.length - 1])) return null;
+  if (Math.abs(flipValue) >= Math.abs(oldSeries[oldSeries.length - 1])) {
+    diagCount('macd-deceleration-continuation:05-fail-flip-not-below-old-last');
+    return null;
+  }
 
   // Хард-гейт |lastValue| < |flipValue|, буквально по докстрингу этого
   // файла ("the first bar of the new color is smaller in magnitude than
@@ -199,7 +208,10 @@ export function detectMacdDecelerationContinuation(
   // структурно конфликтовало с этим гейтом), а измеряет качество самой
   // setup — длину декей-серии и то, насколько ТИХИЙ флип-бар относительно
   // last-бара старой серии (что и есть определение паттерна).
-  if (Math.abs(lastValue) >= Math.abs(flipValue)) return null;
+  if (Math.abs(lastValue) >= Math.abs(flipValue)) {
+    diagCount('macd-deceleration-continuation:05-fail-last-not-below-flip');
+    return null;
+  }
   gate('macd-deceleration-continuation:05-decay');
 
   // "Pause" candle. Промт-фикс п.3: pauseIdx больше не совпадает численно с
@@ -256,7 +268,10 @@ export function detectMacdDecelerationContinuation(
   // здесь реально вычисляется, а не тихо остаётся null.
   if (snapshot?.atr != null && snapshot.atr > 0) {
     const flipBody = Math.abs(last.close - last.open);
-    if (flipBody > snapshot.atr * 2) return null;
+    if (flipBody > snapshot.atr * 2) {
+      diagCount('macd-deceleration-continuation:08pre-fail-news-atr');
+      return null;
+    }
   }
 
   let correctionMultiplier = 1;
@@ -276,7 +291,10 @@ export function detectMacdDecelerationContinuation(
           direction === 'buy'
             ? (struct.swingHigh - c.close) / swingRange
             : (c.close - struct.swingLow) / swingRange;
-        if (r > 0.786) return null;
+        if (r > 0.786) {
+          diagCount('macd-deceleration-continuation:08pre-fail-fib-786');
+          return null;
+        }
       }
       const lastCandle = candles[candles.length - 1];
       const retracement =
@@ -341,7 +359,11 @@ export function detectMacdDecelerationContinuation(
 
   // Промт-фикс п.2: единственная из "трендовых" M1-стратегий без явного
   // порога входа — см. ENTRY_THRESHOLD выше.
-  if (confidence < ENTRY_THRESHOLD) return null;
+  diagCount(`macd-deceleration-continuation:08pre-confidence-${(Math.floor(confidence * 20) / 20).toFixed(2)}`);
+  if (confidence < ENTRY_THRESHOLD) {
+    diagCount('macd-deceleration-continuation:08pre-fail-confidence');
+    return null;
+  }
   gate('macd-deceleration-continuation:08-confidence');
 
   return {
