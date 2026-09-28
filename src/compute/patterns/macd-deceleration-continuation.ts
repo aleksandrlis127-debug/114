@@ -146,13 +146,26 @@ export function detectMacdDecelerationContinuation(
   // made oldSeries empty in every realistic decaying-then-flip scenario and
   // silently disabled the entire pattern's primary detection path — fixed
   // here as part of the Phase 3 audit (bolt-prompt-8-strategies-replacement.md).
-  const oldSeries: number[] = [];
+  const run: number[] = [];
   for (let i = flipIdx - 1; i >= 0; i--) {
     const h = histWindow[i];
     if (h === null) break;
     if (Math.sign(h) !== flipSign) break;
-    oldSeries.unshift(h);
+    run.unshift(h);
   }
+  // BUGFIX (реальный прогон 2026-09-28: 04-old-series=8321 -> 05-decay=0):
+  // одноцветный забег гистограммы всегда начинается с НАРАСТАНИЯ от нуля до
+  // пика и только потом затухает. Раньше oldSeries брался целиком, и проверка
+  // "каждый бар <= 0.9 предыдущего" по всей серии проваливалась на
+  // нарастающем участке почти всегда (на синтетике 12120 из 12132). Пройти её
+  // мог лишь забег, пик которого уже вышел за левую границу 15-барного окна.
+  // Затухающая коррекция — это хвост забега ОТ ПИКА, поэтому серия для
+  // проверки затухания начинается с бара максимальной величины.
+  let peakIdx = 0;
+  for (let i = 1; i < run.length; i++) {
+    if (Math.abs(run[i]) > Math.abs(run[peakIdx])) peakIdx = i;
+  }
+  const oldSeries: number[] = run.slice(peakIdx);
   if (oldSeries.length < MIN_SERIES_LENGTH) return null;
   gate('macd-deceleration-continuation:04-old-series');
 
