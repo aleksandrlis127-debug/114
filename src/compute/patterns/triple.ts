@@ -1,4 +1,5 @@
 import type { Candle, PatternResult, SignalStrength, SignalDirection, MarketStructure, IndicatorSnapshot } from '@/types/domain';
+import { gate } from './gate-trace';
 import { clamp01, averageVolume, averageBody, hasReliableVolume } from '@/compute/indicators/helpers';
 import { rsi as calcRsi } from '@/compute/indicators/rsi';
 import type { SessionRegime } from '@/compute/session-regime';
@@ -507,6 +508,7 @@ export function detectAbandonedBabyBottom(ctx: TripleContext): PatternResult | n
   const { candles, htfStructure, session, indicators } = ctx;
   const n = candles.length;
   if (n < 4 + TREND_LOOKBACK) return null;
+  gate('abandoned-baby-bottom:00-evaluated');
   const idx = n - 4;
   const a = candles[idx];
   const b = candles[idx + 1];
@@ -515,15 +517,18 @@ export function detectAbandonedBabyBottom(ctx: TripleContext): PatternResult | n
 
   if (countBearish(candles, idx, TREND_LOOKBACK) < TREND_MIN_COUNT) return null;
   if (!hasPrecedingBearish(candles, idx, TREND_LOOKBACK)) return null;
+  gate('abandoned-baby-bottom:01-trend');
 
   if (a.close >= a.open) return null;
   const bodyA = Math.abs(a.close - a.open);
   const atrValue = indicators?.atr ?? null;
   if (atrValue != null && bodyA < 0.6 * atrValue) return null;
+  gate('abandoned-baby-bottom:02-candle-a');
 
   const bodyB = Math.abs(b.close - b.open);
   const rangeB = b.high - b.low || 1e-9;
   if (bodyB / rangeB > 0.05) return null; // doji
+  gate('abandoned-baby-bottom:03-doji');
 
   // BUGFIX (аудит 2026-09-12, §3.1): ATR-нормализованный гэп вместо
   // буквального неперекрытия теней — см. hasAtrNormalizedGap выше.
@@ -535,8 +540,10 @@ export function detectAbandonedBabyBottom(ctx: TripleContext): PatternResult | n
   if (bodyC < 0.8 * bodyA) return null;
   const depth = bodyA > 0 ? (c.close - a.close) / bodyA : 0;
   if (depth <= 0.5) return null;
+  gate('abandoned-baby-bottom:04-gaps-and-candle-c');
 
   if (isAsiaOrClosed(session, ctx.sessionAgnostic)) return null;
+  gate('abandoned-baby-bottom:05-session');
 
   const avgVolA = averageVolume(candles, 20, idx);
   const avgVolB = averageVolume(candles, 20, idx + 1);
@@ -554,12 +561,14 @@ export function detectAbandonedBabyBottom(ctx: TripleContext): PatternResult | n
   const ratioB = avgVolB > 0 ? b.volume / avgVolB : 0;
   const ratioC = avgVolC > 0 ? c.volume / avgVolC : 0;
   if (volumeReliable && ratioA < 1.0 && ratioB < 1.0 && ratioC < 1.0) return null; // объём падает на всех трёх
+  gate('abandoned-baby-bottom:06-volume');
 
   const rsiSeries = calcRsi(candles.map((cc) => cc.close), 14);
   const rsiValue = rsiSeries[idx + 2];
 
   const fourthResult = fourthCandleConfirmation(c, fourth, 'buy');
   if (fourthResult.cancelled) return null;
+  gate('abandoned-baby-bottom:07-fourth-candle');
 
   const base = 0.50;
   const htf = htfAlignmentStrict(htfStructure, 'buy');
@@ -578,6 +587,7 @@ export function detectAbandonedBabyBottom(ctx: TripleContext): PatternResult | n
     base * htf * sessionFactor * volumeFactorValue * gapFactor * fourthResult.multiplier * rsiFactorValue,
   ));
   if (confidence < 0.65) return null;
+  gate('abandoned-baby-bottom:08-confidence');
 
   return {
     name: 'abandoned-baby-bottom',
@@ -596,6 +606,7 @@ export function detectAbandonedBabyTop(ctx: TripleContext): PatternResult | null
   const { candles, htfStructure, session, indicators } = ctx;
   const n = candles.length;
   if (n < 4 + TREND_LOOKBACK) return null;
+  gate('abandoned-baby-top:00-evaluated');
   const idx = n - 4;
   const a = candles[idx];
   const b = candles[idx + 1];
@@ -604,15 +615,18 @@ export function detectAbandonedBabyTop(ctx: TripleContext): PatternResult | null
 
   if (countBullish(candles, idx, TREND_LOOKBACK) < TREND_MIN_COUNT) return null;
   if (!hasPrecedingBullish(candles, idx, TREND_LOOKBACK)) return null;
+  gate('abandoned-baby-top:01-trend');
 
   if (a.close <= a.open) return null;
   const bodyA = Math.abs(a.close - a.open);
   const atrValue = indicators?.atr ?? null;
   if (atrValue != null && bodyA < 0.6 * atrValue) return null;
+  gate('abandoned-baby-top:02-candle-a');
 
   const bodyB = Math.abs(b.close - b.open);
   const rangeB = b.high - b.low || 1e-9;
   if (bodyB / rangeB > 0.05) return null; // doji
+  gate('abandoned-baby-top:03-doji');
 
   // BUGFIX (аудит 2026-09-12, §3.1): ATR-нормализованный гэп вместо
   // буквального неперекрытия теней — см. hasAtrNormalizedGap выше.
@@ -624,8 +638,10 @@ export function detectAbandonedBabyTop(ctx: TripleContext): PatternResult | null
   if (bodyC < 0.8 * bodyA) return null;
   const depth = bodyA > 0 ? (a.close - c.close) / bodyA : 0;
   if (depth <= 0.5) return null;
+  gate('abandoned-baby-top:04-gaps-and-candle-c');
 
   if (isAsiaOrClosed(session, ctx.sessionAgnostic)) return null;
+  gate('abandoned-baby-top:05-session');
 
   const avgVolA = averageVolume(candles, 20, idx);
   const avgVolB = averageVolume(candles, 20, idx + 1);
@@ -637,12 +653,14 @@ export function detectAbandonedBabyTop(ctx: TripleContext): PatternResult | null
   const ratioB = avgVolB > 0 ? b.volume / avgVolB : 0;
   const ratioC = avgVolC > 0 ? c.volume / avgVolC : 0;
   if (volumeReliable && ratioA < 1.0 && ratioB < 1.0 && ratioC < 1.0) return null;
+  gate('abandoned-baby-top:06-volume');
 
   const rsiSeries = calcRsi(candles.map((cc) => cc.close), 14);
   const rsiValue = rsiSeries[idx + 2];
 
   const fourthResult = fourthCandleConfirmation(c, fourth, 'sell');
   if (fourthResult.cancelled) return null;
+  gate('abandoned-baby-top:07-fourth-candle');
 
   const base = 0.50;
   const htf = htfAlignmentStrict(htfStructure, 'sell');
@@ -658,6 +676,7 @@ export function detectAbandonedBabyTop(ctx: TripleContext): PatternResult | null
     base * htf * sessionFactor * volumeFactorValue * gapFactor * fourthResult.multiplier * rsiFactorValue,
   ));
   if (confidence < 0.65) return null;
+  gate('abandoned-baby-top:08-confidence');
 
   return {
     name: 'abandoned-baby-top',

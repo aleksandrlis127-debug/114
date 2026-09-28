@@ -87,6 +87,19 @@ export function detectMeanReversion(
     if (lastBody < lastRange * 0.3) confidence *= 0.7;
 
     confidence = clamp01(confidence);
+
+    // D3 п.7 (продолжение) — только измерение, поведение не меняется:
+    // почему 27/27 кандидатов, прошедших band-exit+RSI (gate 05), не
+    // доходят до gate 06 ни разу. Разбивка по бакетам base/confidence и по
+    // тому, совпал ли idealFlat (ADX<15, главный буст ×1.3) с самим
+    // событием пробоя полос — гипотеза: событие пробоя+RSI-экстремума
+    // структурно антикоррелирует с "плоским" ADX<15, поэтому основной
+    // буст confidence почти никогда не применяется одновременно с
+    // триггером паттерна.
+    diagCount(`mean-reversion:06pre-idealFlat-${idealFlat}`);
+    diagCount(`mean-reversion:06pre-base-${(Math.floor(base * 10) / 10).toFixed(1)}`);
+    diagCount(`mean-reversion:06pre-confidence-${(Math.floor(confidence * 10) / 10).toFixed(1)}`);
+
     if (confidence < ENTRY_THRESHOLD) return null;
     gate('mean-reversion:06-confidence');
 

@@ -1,3 +1,4 @@
+import { gate } from './gate-trace';
 import type {
   Candle,
   PatternResult,
@@ -354,6 +355,7 @@ export function detectFallingThreeMethods(ctx: ContinuationContext): PatternResu
   const { candles, session, indicators } = ctx;
   const n = candles.length;
   if (n < 5 + TREND_LOOKBACK) return null;
+  gate('falling-three-methods:00-evaluated');
   const idx = n - 5;
   const first = candles[idx];
   const c2 = candles[idx + 1];
@@ -366,9 +368,11 @@ export function detectFallingThreeMethods(ctx: ContinuationContext): PatternResu
   //     Lower Highs), паттерн формируется внутри импульса.
   if (countBearish(candles, idx, TREND_LOOKBACK) < TREND_MIN_COUNT) return null;
   if (!hasPrecedingBearish(candles, idx, TREND_LOOKBACK)) return null;
+  gate('falling-three-methods:01-trend');
 
   // 2.8 Азиатская сессия — запретная зона по методичке.
   if (isAsiaOrClosed(session, ctx.sessionAgnostic)) return null;
+  gate('falling-three-methods:02-session');
 
   // 2.2 Свеча 1 — длинный медвежий импульс: тело >= 60% диапазона, >= 1.5x
   //     среднего тела за 20 свечей, закрытие в нижних 20% диапазона,
@@ -382,6 +386,7 @@ export function detectFallingThreeMethods(ctx: ContinuationContext): PatternResu
   if ((first.close - first.low) / range1 > 0.20) return null;
   const upperWick1 = first.high - Math.max(first.open, first.close);
   if (upperWick1 > 0.10 * range1) return null;
+  gate('falling-three-methods:03-candle1');
 
   // 2.3 Свечи 2-4 — малые (тело <= 40% среднего тела, <= 50% тела свечи 1),
   //     без пробоя High/Low свечи 1 даже тенью (инвалидатор).
@@ -400,6 +405,7 @@ export function detectFallingThreeMethods(ctx: ContinuationContext): PatternResu
   if (body5 / range5 < 0.7) return null;
   if (last.close >= first.close) return null;
   if (body5 < body1) return null;
+  gate('falling-three-methods:04-consolidation-and-candle5');
 
   // 2.5 Объём: свеча 1 > среднего, свечи 2-4 < среднего (истощение
   //     покупателей), свеча 5 > среднего, и жёсткий инвалидатор
@@ -415,6 +421,7 @@ export function detectFallingThreeMethods(ctx: ContinuationContext): PatternResu
   if (avgVol4 > 0 && c4.volume >= avgVol4) return null;
   if (avgVol5 > 0 && last.volume <= avgVol5) return null;
   if (last.volume < first.volume) return null; // хард-инвалидатор "volume(5) >= volume(1)"
+  gate('falling-three-methods:05-volume');
 
   // 2.6 RSI(14) должен оставаться < 50 на всей консолидации (2-4) —
   //     обязательный фильтр. rsi5 не хард-гейтится и не сравнивается с
@@ -426,6 +433,7 @@ export function detectFallingThreeMethods(ctx: ContinuationContext): PatternResu
   const rsi5 = rsiSeries[idx + 4];
   if (rsi2 == null || rsi3 == null || rsi4 == null) return null;
   if (rsi2 >= 50 || rsi3 >= 50 || rsi4 >= 50) return null;
+  gate('falling-three-methods:06-rsi');
 
   // 2.7 Гистограмма MACD(12,26,9) < 0 на свечах 2-4 — обязательный фильтр.
   //     Расширение гистограммы вниз на свече 5 (hist5 < hist4) — мягкий
@@ -436,10 +444,12 @@ export function detectFallingThreeMethods(ctx: ContinuationContext): PatternResu
   const hist4 = macdResult.histogram[idx + 3];
   if (hist2 == null || hist3 == null || hist4 == null) return null;
   if (hist2 >= 0 || hist3 >= 0 || hist4 >= 0) return null;
+  gate('falling-three-methods:07-macd');
 
   // 2.9 Мягкие confluence-фильтры: минимум 6 из 9 реализуемых направлений.
   const filters = buildContinuationFilters(ctx, first, last, 'sell', rsi5);
   if (countPassedFilters(filters) < MIN_FILTERS_REQUIRED) return null;
+  gate('falling-three-methods:08-soft-filters');
 
   // §4 Формула уверенности.
   const extension = body1 > 0 ? body5 / body1 : 1;
@@ -455,6 +465,7 @@ export function detectFallingThreeMethods(ctx: ContinuationContext): PatternResu
     * volatilityBonus,
   );
   if (confidence < 0.5) return null;
+  gate('falling-three-methods:09-confidence');
 
   return {
     name: 'falling-three-methods',

@@ -17,8 +17,10 @@
  * вообще вызывался.
  *
  * Сейчас инструментированы: hammer, inverted-hammer, hanging-man,
- * shooting-star (single.ts) и mean-reversion. Остальные детекторы в воронке
- * НЕ участвуют — добавляйте `gate()` по тому же образцу.
+ * shooting-star (single.ts), mean-reversion, tweezer-bottom/top (double.ts),
+ * abandoned-baby-bottom/top (triple.ts), falling-three-methods
+ * (continuation.ts) и macd-deceleration-continuation. Остальные детекторы в
+ * воронке НЕ участвуют — добавляйте `gate()` по тому же образцу.
  */
 let sink: Map<string, number> | null = null;
 

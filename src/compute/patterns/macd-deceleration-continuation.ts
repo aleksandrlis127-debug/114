@@ -1,4 +1,5 @@
 import type { Candle, PatternResult, SignalStrength, IndicatorSnapshot } from '@/types/domain';
+import { gate } from './gate-trace';
 import { computeStructure } from '@/compute/indicators/trend-structure';
 import { macd } from '@/compute/indicators/macd';
 import type { SessionRegime } from '@/compute/session-regime';
@@ -88,6 +89,7 @@ export function detectMacdDecelerationContinuation(
   smartMoney?: SmartMoneyResult,
 ): PatternResult | null {
   if (candles.length < 35) return null;
+  gate('macd-deceleration-continuation:00-evaluated');
 
   const closes = candles.map((c) => c.close);
   // Промт-фикс п.6: дефолт остаётся классическим 12/26/9 для обратной
@@ -104,6 +106,7 @@ export function detectMacdDecelerationContinuation(
 
   const struct = computeStructure(candles, LOOKBACK_BARS);
   if (struct.trend === 'range') return null;
+  gate('macd-deceleration-continuation:01-trend');
 
   const direction: 'buy' | 'sell' = struct.trend === 'up' ? 'buy' : 'sell';
 
@@ -125,6 +128,7 @@ export function detectMacdDecelerationContinuation(
   const lastSign = Math.sign(lastValue);
   if (flipSign === 0 || lastSign === 0) return null;
   if (flipSign === lastSign) return null;
+  gate('macd-deceleration-continuation:02-histogram-flip');
 
   // Доп. фикс п.7 (не из аудита, но напрямую следует из методологии
   // «Торговая система», §1/§6: сетап — continuation, а не разворотный).
@@ -133,6 +137,7 @@ export function detectMacdDecelerationContinuation(
   // теоретически сигнал buy мог сработать на флипе гистограммы В МИНУС.
   if (direction === 'buy' && lastSign <= 0) return null;
   if (direction === 'sell' && lastSign >= 0) return null;
+  gate('macd-deceleration-continuation:03-flip-direction');
 
   // Last bar(s) of the old (pre-flip) color series — walk backward while the
   // sign still matches flipSign (the decaying same-color run), stopping the
@@ -149,6 +154,7 @@ export function detectMacdDecelerationContinuation(
     oldSeries.unshift(h);
   }
   if (oldSeries.length < MIN_SERIES_LENGTH) return null;
+  gate('macd-deceleration-continuation:04-old-series');
 
   // Monotonically decaying magnitude, normalized to a relative step instead
   // of a strict <= (промт-фикс п.5). On M1 the histogram is often tiny and
@@ -181,6 +187,7 @@ export function detectMacdDecelerationContinuation(
   // setup — длину декей-серии и то, насколько ТИХИЙ флип-бар относительно
   // last-бара старой серии (что и есть определение паттерна).
   if (Math.abs(lastValue) >= Math.abs(flipValue)) return null;
+  gate('macd-deceleration-continuation:05-decay');
 
   // "Pause" candle. Промт-фикс п.3: pauseIdx больше не совпадает численно с
   // абсолютным индексом flipIdx (как было раньше — candles.length - 2 для
@@ -202,6 +209,7 @@ export function detectMacdDecelerationContinuation(
   }
   avgBody /= 10;
   if (pauseBody >= avgBody) return null;
+  gate('macd-deceleration-continuation:06-pause-candle');
 
   // RSI не пересёк 50 во время коррекции (TIER 2, п.11) — hard-инвалидатор,
   // а не мультипликатор. Промт-фикс п.1: snapshot.rsi теперь реально
@@ -222,6 +230,7 @@ export function detectMacdDecelerationContinuation(
   // принципу, что и needRsi — иначе этот новый фильтр воспроизвёл бы тот же
   // класс бага (тихое отключение конфигурацией UI).
   if (snapshot?.adx != null && snapshot.adx < ADX_TREND_CONFIRM) return null;
+  gate('macd-deceleration-continuation:07-rsi-adx');
 
   const last = candles[candles.length - 1];
 
@@ -320,6 +329,7 @@ export function detectMacdDecelerationContinuation(
   // Промт-фикс п.2: единственная из "трендовых" M1-стратегий без явного
   // порога входа — см. ENTRY_THRESHOLD выше.
   if (confidence < ENTRY_THRESHOLD) return null;
+  gate('macd-deceleration-continuation:08-confidence');
 
   return {
     name: 'macd-deceleration-continuation',

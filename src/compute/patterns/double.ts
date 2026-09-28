@@ -1,4 +1,5 @@
 import type { PatternResult, SignalStrength, SignalDirection } from '@/types/domain';
+import { gate } from './gate-trace';
 import { clamp01, averageVolume, hasReliableVolume } from '@/compute/indicators/helpers';
 import type { PatternContext } from './pattern-context';
 import {
@@ -452,21 +453,28 @@ export function detectTweezerBottom(ctx: PatternContext): PatternResult | null {
   const curCandle = candles[index];
   const confirmCandle = candles[index + 1];
   if (!prevCandle || !curCandle || !confirmCandle) return null;
+  gate('tweezer-bottom:00-evaluated');
 
   const tolerance = Math.max(prevCandle.low, curCandle.low) * TWEEZER_TOLERANCE;
   if (Math.abs(prevCandle.low - curCandle.low) > tolerance) return null;
+  gate('tweezer-bottom:01-twin-extreme');
   if (curCandle.close <= curCandle.open) return null;
+  gate('tweezer-bottom:02-body-direction');
 
   const direction: SignalDirection = 'buy';
 
   if (!hasPrecedingBearish(candles, index - 1, 5) && structure.trend !== 'down') return null;
+  gate('tweezer-bottom:03-trend-context');
   if (isAsiaOrClosed(session, ctx.sessionAgnostic)) return null;
+  gate('tweezer-bottom:04-session');
 
   const rsi = indicators?.rsi ?? null;
   if (rsi != null && rsi > 50) return null;
+  gate('tweezer-bottom:05-rsi');
 
   const conf = nextCandleConfirmation(curCandle, confirmCandle, direction);
   if (!conf.confirmed) return null; // обязательное подтверждение — золотое правило методички
+  gate('tweezer-bottom:06-confirmation');
 
   const base = 0.40;
   const rsiFactor = rsi == null ? 1.0
@@ -485,6 +493,7 @@ export function detectTweezerBottom(ctx: PatternContext): PatternResult | null {
   );
 
   if (confidence < 0.5) return null;
+  gate('tweezer-bottom:07-confidence');
 
   return {
     name: 'tweezer-bottom',
@@ -502,21 +511,28 @@ export function detectTweezerTop(ctx: PatternContext): PatternResult | null {
   const curCandle = candles[index];
   const confirmCandle = candles[index + 1];
   if (!prevCandle || !curCandle || !confirmCandle) return null;
+  gate('tweezer-top:00-evaluated');
 
   const tolerance = Math.max(prevCandle.high, curCandle.high) * TWEEZER_TOLERANCE;
   if (Math.abs(prevCandle.high - curCandle.high) > tolerance) return null;
+  gate('tweezer-top:01-twin-extreme');
   if (curCandle.close >= curCandle.open) return null;
+  gate('tweezer-top:02-body-direction');
 
   const direction: SignalDirection = 'sell';
 
   if (!hasPrecedingBullish(candles, index - 1, 5) && structure.trend !== 'up') return null;
+  gate('tweezer-top:03-trend-context');
   if (isAsiaOrClosed(session, ctx.sessionAgnostic)) return null;
+  gate('tweezer-top:04-session');
 
   const rsi = indicators?.rsi ?? null;
   if (rsi != null && rsi < 50) return null;
+  gate('tweezer-top:05-rsi');
 
   const conf = nextCandleConfirmation(curCandle, confirmCandle, direction);
   if (!conf.confirmed) return null; // обязательное подтверждение — золотое правило методички
+  gate('tweezer-top:06-confirmation');
 
   const base = 0.40;
   const rsiFactor = rsi == null ? 1.0
@@ -535,6 +551,7 @@ export function detectTweezerTop(ctx: PatternContext): PatternResult | null {
   );
 
   if (confidence < 0.5) return null;
+  gate('tweezer-top:07-confidence');
 
   return {
     name: 'tweezer-top',
