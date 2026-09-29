@@ -39,6 +39,8 @@ import { detectOrderBlockBreaker } from './order-block-breaker';
 import { detectOrderBlockNested } from './order-block-nested';
 import { detectHarmonicPattern, type HarmonicConfig } from './harmonic-pattern';
 import type { PatternContext } from './pattern-context';
+import { htfAlignment } from './pattern-context';
+import { diagCount, isDiagnosticTraceActive, htfClassOf } from './diagnostic-trace';
 import { getSessionRegime } from '@/compute/session-regime';
 import type { SmartMoneyResult } from '@/compute/indicators/smart-money';
 import { computeHtfStructure } from '@/compute/indicators/htf-structure';
@@ -215,6 +217,24 @@ export function detectAllPatterns(
   // внутри самих детекторов) — это два разных, теперь действительно
   // независимых измерения, а не одно и то же дважды.
   const htfStructure = htfStructureOverride ?? computeHtfStructure(candles, atrPeriod);
+
+  // D3-измерение (только диагностика, поведение НЕ меняется). Воронка показала:
+  // класс HTF-множителя '1.00-bos' почти не встречается среди кандидатов
+  // детекторов (tweezer 17 из ~65k, hammer-семейство 0 из ~3k). Два
+  // конкурирующих объяснения: (а) bos/choch в computeStructure — разовое
+  // событие пересечения на последнем M15-баре, а не состояние тренда;
+  // (б) разворотным паттернам по природе не по пути с BOS в их сторону.
+  // Частота классов на КАЖДОМ баре независимо от паттернов их разделяет:
+  // если и по всем барам bos-класс ≈ доле кандидатов, верно (а).
+  // Пишется только внутри диагностической трассировки (аудит с --funnel).
+  if (isDiagnosticTraceActive()) {
+    diagCount('htf-baseline:bars');
+    diagCount(`htf-baseline:buy-${htfClassOf(htfAlignment(htfStructure, 'buy'))}`);
+    diagCount(`htf-baseline:sell-${htfClassOf(htfAlignment(htfStructure, 'sell'))}`);
+    diagCount(`htf-baseline:trend-${htfStructure.trend}`);
+    if (htfStructure.bos) diagCount('htf-baseline:flag-bos');
+    if (htfStructure.choch) diagCount('htf-baseline:flag-choch');
+  }
 
   // Build PatternContext for the 6 context-aware patterns.
   // patternCandle = candles[length - 2], confirmCandle = candles[length - 1].
