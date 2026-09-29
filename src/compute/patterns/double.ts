@@ -1,5 +1,6 @@
 import type { PatternResult, SignalStrength, SignalDirection } from '@/types/domain';
 import { gate } from './gate-trace';
+import { diagCount, isDiagnosticTraceActive, htfClassOf } from './diagnostic-trace';
 import { clamp01, averageVolume, hasReliableVolume } from '@/compute/indicators/helpers';
 import type { PatternContext } from './pattern-context';
 import {
@@ -447,6 +448,57 @@ export function detectDarkCloudCover(ctx: PatternContext): PatternResult | null 
 
 const TWEEZER_TOLERANCE = 0.001;
 
+// D3-измерение (только диагностика, поведение детекторов НЕ меняется).
+// Воронка показала: 32155 (bottom) / 32764 (top) кандидатов проходят
+// gate 06-confirmation, и НИ ОДИН не проходит confidence >= 0.5. Что именно
+// душит confidence — HTF-класс, RSI-корзина, объём (на Deriv volume ≡ 0, и
+// tweezerVolumeFactor тогда константа 0.90) — воронка не различает.
+// Счётчики пишутся ТОЛЬКО внутри диагностической трассировки
+// (isDiagnosticTraceActive) и в отдельный канал diagCount, поэтому ни лишней
+// работы вне аудита, ни влияния на gate-воронку нет. Имена без символа '|'
+// (он ломает markdown-таблицу formatDiagnosticFunnel).
+const TWEEZER_CONFIDENCE_THRESHOLD = 0.5;
+
+function tweezerRsiBucket(rsi: number | null, side: 'buy' | 'sell'): string {
+  if (rsi == null) return 'na';
+  if (side === 'buy') return rsi < 30 ? 'lt30' : rsi <= 35 ? '30-35' : '35-50';
+  return rsi > 70 ? 'gt70' : rsi >= 65 ? '65-70' : '50-65';
+}
+
+function tenthBucket(v: number): string {
+  return (Math.floor(v * 10) / 10).toFixed(1);
+}
+
+function diagTweezerPreConfidence(
+  name: 'tweezer-bottom' | 'tweezer-top',
+  side: 'buy' | 'sell',
+  p: {
+    htfMultiplier: number;
+    rsi: number | null;
+    confirmMultiplier: number;
+    volumeReliable: boolean;
+    volumeFactor: number;
+    confidence: number;
+  },
+): void {
+  const htf = htfClassOf(p.htfMultiplier);
+  const rsiB = tweezerRsiBucket(p.rsi, side);
+  // Контрфактическая confidence с нейтральным объёмом (множитель 1.0) —
+  // ровно то, что даёт остальным детекторам hasReliableVolume()=false.
+  // volumeFactor >= 0.75 всегда, деление безопасно; при confidence < 1
+  // (максимум формулы ≈ 0.73) клэмп не искажает результат.
+  const neutral = clamp01(p.confidence / p.volumeFactor);
+  diagCount(`${name}:07pre-htf-${htf}`);
+  diagCount(`${name}:07pre-rsi-${rsiB}`);
+  diagCount(`${name}:07pre-joint-htf${htf}+rsi-${rsiB}`);
+  diagCount(`${name}:07pre-confirm-${p.confirmMultiplier >= 1.2 ? 'strong' : 'weak'}`);
+  diagCount(`${name}:07pre-volume-${p.volumeReliable ? 'real' : 'none'}`);
+  diagCount(`${name}:07pre-confidence-${tenthBucket(p.confidence)}`);
+  diagCount(`${name}:07pre-confidence-volneutral-${tenthBucket(neutral)}`);
+  diagCount(`${name}:07pre-passes-actual-${p.confidence >= TWEEZER_CONFIDENCE_THRESHOLD}`);
+  diagCount(`${name}:07pre-passes-volneutral-${neutral >= TWEEZER_CONFIDENCE_THRESHOLD}`);
+}
+
 export function detectTweezerBottom(ctx: PatternContext): PatternResult | null {
   const { candles, index, structure, htfStructure, session, indicators } = ctx;
   const prevCandle = candles[index - 1];
@@ -491,6 +543,17 @@ export function detectTweezerBottom(ctx: PatternContext): PatternResult | null {
     * conf.multiplier
     * rsiFactor,
   );
+
+  if (isDiagnosticTraceActive()) {
+    diagTweezerPreConfidence('tweezer-bottom', 'buy', {
+      htfMultiplier: htfAlignment(htfStructure, direction),
+      rsi,
+      confirmMultiplier: conf.multiplier,
+      volumeReliable: hasReliableVolume(candles, index, 20),
+      volumeFactor: tweezerVolumeFactor(curCandle.volume, prevCandle.volume),
+      confidence,
+    });
+  }
 
   if (confidence < 0.5) return null;
   gate('tweezer-bottom:07-confidence');
@@ -549,6 +612,17 @@ export function detectTweezerTop(ctx: PatternContext): PatternResult | null {
     * conf.multiplier
     * rsiFactor,
   );
+
+  if (isDiagnosticTraceActive()) {
+    diagTweezerPreConfidence('tweezer-top', 'sell', {
+      htfMultiplier: htfAlignment(htfStructure, direction),
+      rsi,
+      confirmMultiplier: conf.multiplier,
+      volumeReliable: hasReliableVolume(candles, index, 20),
+      volumeFactor: tweezerVolumeFactor(curCandle.volume, prevCandle.volume),
+      confidence,
+    });
+  }
 
   if (confidence < 0.5) return null;
   gate('tweezer-top:07-confidence');
