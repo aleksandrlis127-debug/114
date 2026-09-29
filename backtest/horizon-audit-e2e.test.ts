@@ -22,6 +22,7 @@ import { generateRandomWalk } from './synthetic/random-walk';
 // малой долей типичного движения — как в реальной жизни, а не доминировал
 // над ним.
 vi.mock('./data-loader', () => ({
+  resolveHistorySource: () => 'deriv' as const,
   loadHistory: ({ symbol }: { symbol: string }) =>
     Promise.resolve({
       candles: generateRandomWalk(

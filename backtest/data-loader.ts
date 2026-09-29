@@ -113,12 +113,28 @@ export interface LoadResult {
   truncated: boolean;
 }
 
+export type HistorySource = 'binance' | 'deriv';
+
+/**
+ * Единая точка выбора источника истории (её же использует метка в отчёте и
+ * ключ кэша occurrences). По умолчанию маршрут прежний: isDerivSupported()
+ * проверяется первым, поэтому BTC/ETH/SOL/BNB идут через Deriv (volume ≡ 0).
+ * BACKTEST_CRYPTO_SOURCE=binance переключает КРИПТУ на Binance REST (реальный
+ * объём); форекс всегда остаётся на Deriv.
+ */
+export function resolveHistorySource(
+  symbol: string,
+  env: Record<string, string | undefined> = process.env,
+): HistorySource {
+  const preferBinance = env.BACKTEST_CRYPTO_SOURCE?.trim().toLowerCase() === 'binance';
+  if (preferBinance && isCrypto(symbol)) return 'binance';
+  if (isDerivSupported(symbol)) return 'deriv';
+  if (isCrypto(symbol)) return 'binance';
+  return 'deriv';
+}
+
 export async function loadHistory(options: LoadOptions): Promise<LoadResult> {
-  const { symbol } = options;
-  if (isDerivSupported(symbol)) {
-    return loadDerivHistory(options);
-  }
-  if (isCrypto(symbol)) {
+  if (resolveHistorySource(options.symbol) === 'binance') {
     return { candles: await loadBinanceHistory(options), truncated: false };
   }
   return loadDerivHistory(options);

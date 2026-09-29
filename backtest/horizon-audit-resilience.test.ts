@@ -15,6 +15,7 @@ import { generateRandomWalk } from './synthetic/random-walk';
 // после фикса (EURUSD посчитан, GBPUSD отмечен как провалившийся, а не
 // молча пропущен и не уронивший всё остальное).
 vi.mock('./data-loader', () => ({
+  resolveHistorySource: () => 'deriv' as const,
   loadHistory: ({ symbol }: { symbol: string }) => {
     if (symbol === 'GBPUSD') return Promise.reject(new Error('Deriv WS: connection failed'));
     return Promise.resolve({

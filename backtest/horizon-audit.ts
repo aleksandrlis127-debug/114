@@ -46,8 +46,8 @@ import { fileURLToPath } from 'node:url';
 import { writeFile, mkdir, rename, unlink } from 'node:fs/promises';
 import { join } from 'node:path';
 import { execSync } from 'node:child_process';
-import { loadHistory } from './data-loader';
-import { isDerivSupported, isCrypto } from '@/data/symbols';
+import { loadHistory, resolveHistorySource } from './data-loader';
+import { isCrypto } from '@/data/symbols';
 import { resample } from './resampler';
 import { binomialSignificanceTest, MIN_SAMPLES_FOR_SIGNIFICANCE } from './significance';
 import { wilsonLowerBound } from '@/lib/wilson';
@@ -998,8 +998,8 @@ export function generateMarkdown(
   lines.push(`> Период: ${dateRange.from} → ${dateRange.to}`);
   lines.push(`> Инструменты (пул): ${symbolsStr}`);
   // Сверка 2026-09-20: метка источника по реальному маршруту loadHistory
-  // (isDerivSupported проверяется первым — BTC/ETH/SOL/BNB идут через Deriv, а не Binance).
-  const sourceLabels = [...new Set(args.symbols.map((sym) => (isDerivSupported(sym) ? 'Deriv WebSocket' : 'Binance REST')))];
+  // (по умолчанию BTC/ETH/SOL/BNB идут через Deriv; BACKTEST_CRYPTO_SOURCE=binance переключает крипту на Binance).
+  const sourceLabels = [...new Set(args.symbols.map((sym) => (resolveHistorySource(sym) === 'deriv' ? 'Deriv WebSocket' : 'Binance REST')))];
   lines.push(`> Источник: ${sourceLabels.join(' + ')} (1m candles → resampled to ${args.timeframe})`);
   if (args.split === 'walkforward') {
     lines.push(`> Разбиение: walk-forward, ${args.walkForwardFolds} folds, purge ${args.purgeBars} bars`);
@@ -1287,6 +1287,7 @@ export async function main(): Promise<void> {
       activeFeatures,
       config,
       algorithmVersion: OCCURRENCE_ALGORITHM_VERSION,
+      source: resolveHistorySource(symbolId),
     };
     // --funnel: кэш не читаем — при попадании детекторы не запускаются и
     // воронка гейтов осталась бы неполной.

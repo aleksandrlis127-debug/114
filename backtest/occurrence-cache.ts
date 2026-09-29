@@ -54,6 +54,8 @@ export interface CacheKey {
   activeFeatures: readonly string[];
   config: Record<string, unknown>;
   algorithmVersion: number;
+  /** Источник истории ('deriv' | 'binance'). Не задан — ключ как раньше (обратная совместимость). */
+  source?: string;
 }
 
 function fingerprint(key: CacheKey): string {
@@ -68,6 +70,7 @@ function fingerprint(key: CacheKey): string {
     `e${key.maxExpiry}`,
     [...key.activeFeatures].sort().join(','),
     JSON.stringify(key.config),
+    ...(key.source ? [`src:${key.source}`] : []),
   ];
   return createHash('sha256').update(parts.join('|')).digest('hex').slice(0, 24);
 }
