@@ -91,11 +91,16 @@ export function computeDirectionScore(
       pushSell('bos', 'bos', -1, 'BOS bearish');
     }
   }
+  // CHoCH в computeStructure — слом ПРЕДЫДУЩЕГО тренда: при trend='up' это
+  // закрытие ниже swingLow (медвежий слом), при trend='down' — выше swingHigh
+  // (бычий). Раньше здесь было наоборот (up → bullish), что расходилось с
+  // computeStructure и с signal-filters.ts (buy + choch + trend 'up' = слом
+  // против buy). Исправлено 2026-09-30 вместе с направленным htfAlignment.
   if (struct.choch) {
-    if (struct.trend === 'up') {
+    if (struct.trend === 'down') {
       components.structure = 0.5;
       pushBuy('structure', 'choch', 0.5, 'CHoCH bullish');
-    } else if (struct.trend === 'down') {
+    } else if (struct.trend === 'up') {
       components.structure = -0.5;
       pushSell('structure', 'choch', -0.5, 'CHoCH bearish');
     }

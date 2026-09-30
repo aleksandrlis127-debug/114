@@ -59,20 +59,32 @@ describe('computeDirectionScore — sell direction', () => {
 });
 
 describe('computeDirectionScore — CHoCH', () => {
-  it('CHoCH bullish adds positive structure component', () => {
-    const snapshot = snapshotWith({
-      structure: { trend: 'up', bos: false, choch: true, swingHigh: 110, swingLow: 95, provisional: false },
-    });
-    const result = computeDirectionScore(makeCandles(60, 'up'), snapshot);
-    expect(result.components.structure).toBe(0.5);
-  });
-
-  it('CHoCH bearish adds negative structure component', () => {
+  // CHoCH = слом предыдущего тренда (см. computeStructure): бычий слом бывает
+  // только при trend 'down' (close > swingHigh), медвежий — только при 'up'.
+  it('CHoCH bullish (слом нисходящего тренда вверх) adds positive structure component', () => {
     const snapshot = snapshotWith({
       structure: { trend: 'down', bos: false, choch: true, swingHigh: 110, swingLow: 95, provisional: false },
     });
     const result = computeDirectionScore(makeCandles(60, 'down'), snapshot);
+    expect(result.components.structure).toBe(0.5);
+    expect(result.factors.find((f) => f.name === 'choch')?.direction).toBe('buy');
+  });
+
+  it('CHoCH bearish (слом восходящего тренда вниз) adds negative structure component', () => {
+    const snapshot = snapshotWith({
+      structure: { trend: 'up', bos: false, choch: true, swingHigh: 110, swingLow: 95, provisional: false },
+    });
+    const result = computeDirectionScore(makeCandles(60, 'up'), snapshot);
     expect(result.components.structure).toBe(-0.5);
+    expect(result.factors.find((f) => f.name === 'choch')?.direction).toBe('sell');
+  });
+
+  it('CHoCH в range (недостижимо в computeStructure) не даёт компонента', () => {
+    const snapshot = snapshotWith({
+      structure: { trend: 'range', bos: false, choch: true, swingHigh: 110, swingLow: 95, provisional: false },
+    });
+    const result = computeDirectionScore(makeCandles(60, 'up'), snapshot);
+    expect(result.components.structure).toBe(0);
   });
 });
 
