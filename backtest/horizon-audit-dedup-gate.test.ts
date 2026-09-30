@@ -321,6 +321,7 @@ describe('generateMarkdown (схема 2)', () => {
     dedupeScope: 'pool',
     indicators: 'live',
     funnel: false,
+    ungatedDiag: false,
   };
   const poolMeta: PoolMeta = {
     symbols: args.symbols,

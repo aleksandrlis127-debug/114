@@ -1,6 +1,7 @@
 import type { PatternResult, SignalStrength, SignalDirection } from '@/types/domain';
 import { gate } from './gate-trace';
 import { diagCount, isDiagnosticTraceActive, htfClassOf } from './diagnostic-trace';
+import { isUngatedDiagActive, ungatedCandidate } from './ungated-diag';
 import { clamp01, averageVolume, hasReliableVolume } from '@/compute/indicators/helpers';
 import type { PatternContext } from './pattern-context';
 import {
@@ -242,6 +243,7 @@ export function detectBullishHarami(ctx: PatternContext): PatternResult | null {
     * conf.multiplier,
   );
 
+  if (isUngatedDiagActive()) ungatedCandidate('bullish-harami', 'buy', confidence, 0.45, htfAlignment(htfStructure, direction));
   if (confidence < 0.45) return null;
 
   return {
@@ -292,6 +294,7 @@ export function detectBearishHarami(ctx: PatternContext): PatternResult | null {
     * conf.multiplier,
   );
 
+  if (isUngatedDiagActive()) ungatedCandidate('bearish-harami', 'sell', confidence, 0.45, htfAlignment(htfStructure, direction));
   if (confidence < 0.45) return null;
 
   return {
@@ -555,6 +558,7 @@ export function detectTweezerBottom(ctx: PatternContext): PatternResult | null {
     });
   }
 
+  if (isUngatedDiagActive()) ungatedCandidate('tweezer-bottom', 'buy', confidence, TWEEZER_CONFIDENCE_THRESHOLD, htfAlignment(htfStructure, direction));
   if (confidence < 0.5) return null;
   gate('tweezer-bottom:07-confidence');
 
@@ -624,6 +628,7 @@ export function detectTweezerTop(ctx: PatternContext): PatternResult | null {
     });
   }
 
+  if (isUngatedDiagActive()) ungatedCandidate('tweezer-top', 'sell', confidence, TWEEZER_CONFIDENCE_THRESHOLD, htfAlignment(htfStructure, direction));
   if (confidence < 0.5) return null;
   gate('tweezer-top:07-confidence');
 

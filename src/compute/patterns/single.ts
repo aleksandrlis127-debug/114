@@ -3,6 +3,7 @@ import { clamp01, averageVolume } from '@/compute/indicators/helpers';
 import type { PatternContext } from './pattern-context';
 import { gate } from './gate-trace';
 import { diagCount, htfClassOf } from './diagnostic-trace';
+import { isUngatedDiagActive, ungatedCandidate } from './ungated-diag';
 import {
   sessionBoost,
   htfAlignment,
@@ -124,6 +125,7 @@ export function detectHammer(ctx: PatternContext): PatternResult | null {
     base * ha * sb * conf.multiplier * vf * rsiFactor + obBonus,
   );
 
+  if (isUngatedDiagActive()) ungatedCandidate('hammer', 'buy', confidence, 0.45, ha);
   if (confidence < 0.45) return null;
   gate('hammer:06-confidence');
   diagCount(`hammer:htf-pass-${htfClassOf(ha)}`); // D3 п.6 — только измерение
@@ -242,6 +244,7 @@ export function detectShootingStar(ctx: PatternContext): PatternResult | null {
     base * ha * sb * conf.multiplier * vf * rsiFactor + obBonus,
   );
 
+  if (isUngatedDiagActive()) ungatedCandidate('shooting-star', 'sell', confidence, 0.45, ha);
   if (confidence < 0.45) return null;
   gate('shooting-star:06-confidence');
   diagCount(`shooting-star:htf-pass-${htfClassOf(ha)}`); // D3 п.6 — только измерение
@@ -358,6 +361,7 @@ export function detectInvertedHammer(ctx: PatternContext): PatternResult | null 
     base * ha * sb * conf.multiplier * vf * rsiFactor + obBonus,
   );
 
+  if (isUngatedDiagActive()) ungatedCandidate('inverted-hammer', 'buy', confidence, 0.45, ha);
   if (confidence < 0.45) return null;
   gate('inverted-hammer:06-confidence');
   diagCount(`inverted-hammer:htf-pass-${htfClassOf(ha)}`); // D3 п.6 — только измерение
@@ -436,6 +440,7 @@ export function detectHangingMan(ctx: PatternContext): PatternResult | null {
     base * ha * sb * conf.multiplier * vf * rsiFactor + obBonus,
   );
 
+  if (isUngatedDiagActive()) ungatedCandidate('hanging-man', 'sell', confidence, 0.45, ha);
   if (confidence < 0.45) return null;
   gate('hanging-man:06-confidence');
   diagCount(`hanging-man:htf-pass-${htfClassOf(ha)}`); // D3 п.6 — только измерение

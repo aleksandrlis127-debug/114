@@ -64,6 +64,8 @@ import { assignHoldoutPartitions, computeFoldBoundaries, assignFoldIndex, type F
 import { detectAllPatterns } from '@/compute/patterns';
 import { beginGateTrace, endGateTrace } from '@/compute/patterns/gate-trace';
 import { beginDiagnosticTrace, endDiagnosticTrace, formatDiagnosticFunnel } from '@/compute/patterns/diagnostic-trace';
+import { beginUngatedDiag, endUngatedDiag, drainUngatedCandidates } from '@/compute/patterns/ungated-diag';
+import { aggregateUngated, formatUngatedReport, type UngatedRecord } from './ungated-diag';
 import { computeIndicatorSeriesRaw, snapshotFromSeries } from '@/compute/IndicatorAggregator';
 import { readCache, writeCache, type CacheKey } from './occurrence-cache';
 import { computeStructure } from '@/compute/indicators/trend-structure';
@@ -113,6 +115,13 @@ export interface CliArgs {
    * были бы неполными.
    */
   funnel: boolean;
+  /**
+   * Исследовательский режим без confidence-гейта: точность ВСЕХ кандидатов
+   * tweezer/harami/hammer-семейства по HTF-классам (backtest/ungated-diag.ts).
+   * Кэш occurrences не читается и не пишется, вердикты и таблица горизонтов
+   * не строятся; отчёт пишется отдельным файлом.
+   */
+  ungatedDiag: boolean;
 }
 
 export type DedupeScope = 'pool' | 'symbol';
@@ -162,7 +171,9 @@ function parseArgs(): CliArgs {
     from: map.get('from') ?? '2026-06-16',
     to: map.get('to') ?? '2026-09-16',
     timeframe: map.get('timeframe') ?? '15m',
-    outputDir: map.get('output') ?? 'backtest/output',
+    // --ungated-diag — исследовательский отчёт: по умолчанию в некоммитируемый
+    // каталог, чтобы не смешивать с отчётами аудита в backtest/output.
+    outputDir: map.get('output') ?? (map.get('ungated-diag') === 'true' || map.get('ungated-diag') === '1' ? 'backtest/output-run/ungated' : 'backtest/output'),
     windowSize: parseInt(map.get('window') ?? '500', 10),
     minSamples: parseInt(map.get('min-samples') ?? '30', 10),
     significanceAlpha: parseFloat(map.get('alpha') ?? '0.05'),
@@ -174,6 +185,7 @@ function parseArgs(): CliArgs {
     dedupeScope: dedupeArg,
     indicators: indicatorsArg,
     funnel: map.get('funnel') === 'true' || map.get('funnel') === '1',
+    ungatedDiag: map.get('ungated-diag') === 'true' || map.get('ungated-diag') === '1',
   };
 }
 
@@ -414,6 +426,9 @@ export function buildOccurrences(
   windowSize: number,
   maxExpiry: number,
   onProgress?: (current: number, total: number, elapsedMs: number) => void,
+  // --ungated-diag: сюда складываются кандидаты ДО confidence-гейта с исходами.
+  // Возвращаемые occurrences от этого параметра не зависят.
+  ungatedSink?: UngatedRecord[],
 ): Occurrence[] {
   const occurrences: Occurrence[] = [];
   const minStart = Math.max(windowSize, 50);
@@ -484,6 +499,31 @@ export function buildOccurrences(
     );
 
     const entryCandle = candles[i];
+
+    if (ungatedSink) {
+      for (const u of drainUngatedCandidates()) {
+        const grid = HORIZON_GRIDS[u.name];
+        if (!grid) continue;
+        const outcomes = new Map<number, number>();
+        for (const expiry of grid) {
+          if (i + expiry >= candles.length) {
+            outcomes.set(expiry, 0);
+            continue;
+          }
+          outcomes.set(expiry, resolveBinaryOutcome(entryCandle.close, candles[i + expiry].close, u.direction, spread));
+        }
+        ungatedSink.push({
+          patternName: u.name,
+          direction: u.direction,
+          symbolId,
+          barIndex: i,
+          htfClass: u.htfClass,
+          confidence: u.confidence,
+          passedGate: u.confidence >= u.threshold,
+          outcomes,
+        });
+      }
+    }
 
     for (const p of patterns) {
       if (EXCLUDED_PATTERNS.has(p.name)) continue;
@@ -1263,6 +1303,8 @@ export async function main(): Promise<void> {
   let totalCandles1m = 0;
   let totalCandlesResampled = 0;
 
+  const ungatedRecords: UngatedRecord[] = [];
+  if (args.ungatedDiag) beginUngatedDiag();
   if (args.funnel) beginGateTrace();
   // D3: тот же флаг --funnel включает и независимый диагностический канал
   // (diagnostic-trace.ts) — см. его комментарий насчёт того, почему это не
@@ -1291,7 +1333,7 @@ export async function main(): Promise<void> {
     };
     // --funnel: кэш не читаем — при попадании детекторы не запускаются и
     // воронка гейтов осталась бы неполной.
-    const cached = args.funnel ? null : await readCache(cacheKey);
+    const cached = args.funnel || args.ungatedDiag ? null : await readCache(cacheKey);
 
     if (cached) {
       console.log(`\n${symbolId}: occurrence cache hit — skipping network entirely (${cached.occurrences.length} occurrences, ${cached.candleCounts.candles1m} 1m candles at cache time)${cached.candleCounts.truncated ? ' [TRUNCATED]' : ''}`);
@@ -1340,8 +1382,10 @@ export async function main(): Promise<void> {
       totalCandlesResampled += candles.length;
 
       console.log(`  ${symbolId}: running detectors on ${candles.length - maxExpiry - args.windowSize} bars...`);
-      const occs = buildOccurrences(candles, symbolId, activeFeatures, config, args.windowSize, maxExpiry);
-      await writeCache(cacheKey, occs, { candles1m: candles1m.length, candlesResampled: candles.length, truncated: historyTruncated });
+      const occs = buildOccurrences(candles, symbolId, activeFeatures, config, args.windowSize, maxExpiry, undefined, args.ungatedDiag ? ungatedRecords : undefined);
+      if (!args.ungatedDiag) {
+        await writeCache(cacheKey, occs, { candles1m: candles1m.length, candlesResampled: candles.length, truncated: historyTruncated });
+      }
       console.log(`  ${symbolId}: ${occs.length} occurrences (calculated)`);
       allOccurrences.push(...occs);
     } catch (err) {
@@ -1358,6 +1402,27 @@ export async function main(): Promise<void> {
   const diagnosticFunnel: Record<string, number> | undefined = args.funnel
     ? Object.fromEntries([...endDiagnosticTrace()].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)))
     : undefined;
+
+  if (args.ungatedDiag) {
+    endUngatedDiag();
+    if (ungatedRecords.length === 0) {
+      console.error('--ungated-diag: no candidates collected across any symbol. Exiting.');
+      process.exit(1);
+    }
+    const rows = aggregateUngated(ungatedRecords, HORIZON_GRIDS);
+    const report = formatUngatedReport(rows, {
+      symbols: args.symbols,
+      timeframe,
+      from: args.from,
+      to: args.to,
+      breakevenRate,
+    });
+    await mkdir(args.outputDir, { recursive: true });
+    const diagPath = join(args.outputDir, `ungated-diag-${symbolsSlug}-${timeframe}-${args.from}-${args.to}.md`);
+    await writeFile(diagPath, report, 'utf-8');
+    console.log(`\n--ungated-diag: ${ungatedRecords.length} candidates → ${diagPath} (research only, no verdicts written)`);
+    return;
+  }
 
   if (allOccurrences.length === 0) {
     console.error('No occurrences detected across any symbol. Exiting.');
