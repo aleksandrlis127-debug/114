@@ -56,9 +56,22 @@ export function sessionBoost(session: SessionRegime): number {
 // сигналов в full-snapshot.ts и patterns/index.ts. Шкала множителя (0.4 /
 // 0.5 / 0.75 / 1.0) сознательно не меняется этим фиксом — меняется только
 // источник данных, которым она параметризуется.
+/**
+ * CHoCH в computeStructure — слом ПРЕДЫДУЩЕГО тренда: при trend='up' это закрытие
+ * ниже swingLow (медвежий слом), при trend='down' — выше swingHigh (бычий слом);
+ * в range choch всегда false. Поэтому бычий CHoCH = trend 'down' + choch,
+ * медвежий = trend 'up' + choch. Раньше htfAlignment давал 0.75 любому CHoCH,
+ * и слом против направления сделки усиливал её так же, как слом в её сторону
+ * (аудит 2026-09-30: buy-0.75-choch === sell-0.75-choch === flag-choch).
+ */
+export function chochAlignsWithDirection(structure: MarketStructure, direction: SignalDirection): boolean {
+  if (!structure.choch) return false;
+  return (direction === 'buy' && structure.trend === 'down') || (direction === 'sell' && structure.trend === 'up');
+}
+
 export function htfAlignment(htfStructure: MarketStructure, direction: SignalDirection): number {
   if (htfStructure.bos && ((direction === 'buy' && htfStructure.trend === 'up') || (direction === 'sell' && htfStructure.trend === 'down'))) return 1.0;
-  if (htfStructure.choch) return 0.75;
+  if (chochAlignsWithDirection(htfStructure, direction)) return 0.75;
   if (htfStructure.trend === 'range') return 0.4;
   return 0.5;
 }

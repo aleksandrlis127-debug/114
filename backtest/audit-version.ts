@@ -48,8 +48,12 @@
  *     (см. single.ts, detectShootingStar). Оба изменения меняют состав/
  *     confidence detectAllPatterns, поэтому кэш версии 5 (и любой мнимый
  *     кэш версии 6) молча отдавал бы результаты без этих правок.
+ * 8 — htfAlignment: CHoCH усиливает (0.75) только сделку в сторону слома
+ *     (buy при trend='down', sell при trend='up'); раньше любой CHoCH давал
+ *     0.75 обоим направлениям. Меняет confidence во всех детекторах на
+ *     htfAlignment, поэтому кэш версии 7 отдавал бы прежние результаты.
  */
-export const OCCURRENCE_ALGORITHM_VERSION = 7;
+export const OCCURRENCE_ALGORITHM_VERSION = 8;
 
 /**
  * Версия СХЕМЫ выходного JSON horizon-audit.
