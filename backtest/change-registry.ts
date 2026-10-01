@@ -129,6 +129,14 @@ export const LOGIC_CHANGE_LOG: LogicChangeRecord[] = [
     ],
     frozenAtMs: Date.UTC(2026, 9, 2),
   },
+  {
+    id: 'liquidity-pools-equal-lows-fix',
+    date: '2026-10-02',
+    description:
+      'Решение D5 (fix-plan-liquidity-meanreversion.md, F23): liquidityPools искал «equal lows» как локальные МАКСИМУМЫ ряда лоу (общая проверка с highs); теперь для lows ищется локальный минимум. Имена типов (buy-side из lows, sell-side из highs) и знак вклада ±0.3 в direction-prediction не менялись — это политика/веса, переименование меняло бы знак вклада. Затрагивает только фичу liquidity-pools (components.liquidity). Пороги и веса не менялись. OCCURRENCE_ALGORITHM_VERSION 11→12. Таблица горизонтов не перегенерирована. ВАЖНО: frozenAtMs — день фактического деплоя; при деплое позже 2026-10-02 перенести на реальную дату.',
+    filesChanged: ['src/compute/indicators/liquidity-pools.ts', 'backtest/audit-version.ts'],
+    frozenAtMs: Date.UTC(2026, 9, 2),
+  },
 ];
 
 /**

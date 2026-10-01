@@ -17,8 +17,8 @@ export function liquidityPools(candles: Candle[], lookback: number = 50): Liquid
   const highs = slice.map((c) => c.high);
   const lows = slice.map((c) => c.low);
 
-  const swingHighs = findEqualLevels(highs, equalBars, tolerance);
-  const swingLows = findEqualLevels(lows, equalBars, tolerance);
+  const swingHighs = findEqualLevels(highs, equalBars, tolerance, 'high');
+  const swingLows = findEqualLevels(lows, equalBars, tolerance, 'low');
 
   for (const sh of swingHighs) {
     pools.push({ price: sh.price, type: 'sell-side', touches: sh.touches });
@@ -35,12 +35,21 @@ interface EqualLevel {
   touches: number;
 }
 
-function findEqualLevels(prices: number[], bars: number, tolerance: number): EqualLevel[] {
+// BUGFIX (D5, fix-plan-liquidity-meanreversion.md): для lows раньше использовалась
+// та же проверка, что и для highs (локальный МАКСИМУМ ряда), т.е. «equal lows»
+// были локальными максимумами лоу, а не swing low. Теперь для 'low' ищется
+// локальный минимум. Имена типов ('buy-side' из lows, 'sell-side' из highs) и знак
+// вклада в direction-prediction НЕ менялись (политика/веса, не баг).
+function findEqualLevels(prices: number[], bars: number, tolerance: number, kind: 'high' | 'low'): EqualLevel[] {
   const levels: EqualLevel[] = [];
   for (let i = bars; i < prices.length - bars; i++) {
     let isExtreme = true;
     for (let j = 1; j <= bars; j++) {
-      if (prices[i] < prices[i - j] || prices[i] < prices[i + j]) {
+      const broken =
+        kind === 'high'
+          ? prices[i] < prices[i - j] || prices[i] < prices[i + j]
+          : prices[i] > prices[i - j] || prices[i] > prices[i + j];
+      if (broken) {
         isExtreme = false;
         break;
       }

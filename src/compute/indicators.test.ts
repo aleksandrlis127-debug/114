@@ -465,6 +465,31 @@ describe('liquidityPools', () => {
   it('returns empty for insufficient candles', () => {
     expect(liquidityPools(makeCandles(3, 100))).toHaveLength(0);
   });
+
+  // D5: equal lows — локальные МИНИМУМЫ лоу (раньше искались локальные максимумы).
+  const plateau = (dips: Record<number, number>, spikes: Record<number, number>): Candle[] =>
+    Array.from({ length: 40 }, (_, i) => ({
+      time: i,
+      open: 105,
+      close: 105,
+      high: spikes[i] ?? 110,
+      low: dips[i] ?? 100,
+      volume: 100,
+    }));
+
+  it('находит equal lows как локальные минимумы (buy-side у 95, touches=2)', () => {
+    const pools = liquidityPools(plateau({ 10: 95, 25: 95.5 }, {}));
+    const low = pools.filter((p) => p.type === 'buy-side' && p.price < 97);
+    expect(low).toHaveLength(1);
+    expect(low[0].touches).toBe(2);
+  });
+
+  it('находит equal highs как локальные максимумы (sell-side у 115, touches=2)', () => {
+    const pools = liquidityPools(plateau({}, { 10: 115, 25: 115.5 }));
+    const high = pools.filter((p) => p.type === 'sell-side' && p.price > 113);
+    expect(high).toHaveLength(1);
+    expect(high[0].touches).toBe(2);
+  });
 });
 
 describe('superOrderBlocks', () => {
