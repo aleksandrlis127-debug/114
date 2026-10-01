@@ -9,6 +9,7 @@ import {
   htfAlignment,
   isAsiaOrClosed,
   isNearSwingLevel,
+  isNearSwingLevelForDirection,
   obFvgConfluenceBonus,
   intervalSeconds,
 } from './pattern-context';
@@ -95,7 +96,15 @@ export function detectLiquiditySweep(
   const structureAligned = structure.trend === trendDirection;
   const barTrendStrength = checkTrendStrength(candles, trendDirection, 7);
   const isContinuation = structureAligned || barTrendStrength >= 5 / 7;
-  const isReversalAtKeyLevel = isNearSwingLevel(structure, last, atrValue) && depthInAtr >= 0.5;
+  // BUGFIX (F10, аудит 2026-10-02): раньше здесь стояла isNearSwingLevel без
+  // учёта направления — для buy-свипа хватало близости максимума свечи к
+  // swingHigh (сопротивление), хотя Spring обязан снимать ликвидность под
+  // swingLow, а Upthrust — над swingHigh. Теперь: buy — low свечи у swingLow,
+  // sell — high свечи у swingHigh. Порог proximity (1.5×ATR) и глубина (≥0.5×ATR)
+  // не менялись. `nearSwing` ниже (штраф ×0.8 за отсутствие конфлюэнса) —
+  // отдельное место, в этой правке не тронуто.
+  const isReversalAtKeyLevel =
+    isNearSwingLevelForDirection(structure, last, atrValue, direction) && depthInAtr >= 0.5;
   if (!isContinuation && !isReversalAtKeyLevel) return null;
   const setupType: 'continuation' | 'reversal-at-key-level' = isContinuation
     ? 'continuation'

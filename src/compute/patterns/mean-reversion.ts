@@ -119,7 +119,11 @@ export function detectMeanReversion(
     // Раньше это было неотделимо от gate('mean-reversion:05-band-exit-rsi')
     // ниже, который срабатывает только при ОБОИХ условиях сразу.
     diagCount('mean-reversion:05a-band-exit-only-buy');
-    if (rsiShort !== null && rsiShort < 25) {
+    // BUGFIX (F06, аудит 2026-10-02): раньше направление свечи возврата не
+    // проверялось (lastBody — модуль): медвежья свеча, закрывшаяся выше
+    // нижней полосы после глубокого выхода, давала buy. Свеча возврата для
+    // buy обязана быть бычьей. Пороги и геометрия баров не менялись.
+    if (last.close > last.open && rsiShort !== null && rsiShort < 25) {
       gate('mean-reversion:05-band-exit-rsi');
       diagCount('mean-reversion:05b-band-exit-and-rsi-buy');
       const depthBeyondBB = snapshot.bollingerLower - prev.close;
@@ -134,7 +138,8 @@ export function detectMeanReversion(
   // Bearish mean reversion: close was above upper BB, now reverses back inside
   if (prev.close > snapshot.bollingerUpper && last.close < snapshot.bollingerUpper) {
     diagCount('mean-reversion:05a-band-exit-only-sell');
-    if (rsiShort !== null && rsiShort > 75) {
+    // F06: зеркально — свеча возврата для sell обязана быть медвежьей.
+    if (last.close < last.open && rsiShort !== null && rsiShort > 75) {
       gate('mean-reversion:05-band-exit-rsi');
       diagCount('mean-reversion:05b-band-exit-and-rsi-sell');
       const depthBeyondBB = prev.close - snapshot.bollingerUpper;

@@ -69,6 +69,19 @@ export function chochAlignsWithDirection(structure: MarketStructure, direction: 
   return (direction === 'buy' && structure.trend === 'down') || (direction === 'sell' && structure.trend === 'up');
 }
 
+/**
+ * BOS в computeStructure: при trend='up' это закрытие выше swingHigh (бычий
+ * пробой), при trend='down' — ниже swingLow (медвежий). В range bos означает
+ * пробой в ЛЮБУЮ сторону, а направление пробоя в MarketStructure не хранится,
+ * поэтому BOS в range не подтверждает ни одно направление (решение D2 плана
+ * fix-plan-liquidity-meanreversion.md: ввести поле направления пробоя).
+ * Та же трактовка уже зашита в htfAlignment (bos + trend по направлению сделки).
+ */
+export function bosAlignsWithDirection(structure: MarketStructure, direction: SignalDirection): boolean {
+  if (!structure.bos) return false;
+  return (direction === 'buy' && structure.trend === 'up') || (direction === 'sell' && structure.trend === 'down');
+}
+
 export function htfAlignment(htfStructure: MarketStructure, direction: SignalDirection): number {
   if (htfStructure.bos && ((direction === 'buy' && htfStructure.trend === 'up') || (direction === 'sell' && htfStructure.trend === 'down'))) return 1.0;
   if (chochAlignsWithDirection(htfStructure, direction)) return 0.75;

@@ -353,7 +353,7 @@ export function detectAllPatterns(
   if (has('impulse-breakout')) { const p = detectImpulseBreakout(candles, snapshot, ctx.structure, ctx.session, 20, atrPeriod); if (p) raw.push(p); }
   if (has('consolidation-breakout')) { const p = detectConsolidationBreakout(candles, ctx.structure, ctx.session, 10, atrPeriod, sessionAgnostic); if (p) raw.push(p); }
   if (has('liquidity-sweep')) { const p = detectLiquiditySweep(candles, ctx.structure, ctx.session, ctx.smartMoney, 20, atrPeriod, sessionAgnostic); if (p) raw.push(p); }
-  if (has('liquidity-sweep-reaction')) { const p = detectLiquiditySweepReaction(candles, ctx.structure, ctx.session, ctx.smartMoney, atrPeriod); if (p) raw.push(p); }
+  if (has('liquidity-sweep-reaction')) { const p = detectLiquiditySweepReaction(candles, ctx.structure, ctx.session, ctx.smartMoney, atrPeriod, sessionAgnostic); if (p) raw.push(p); }
   // BUGFIX (аудит 2026-09-06, п.3, и 2026-09-12 §1): htfStructure теперь
   // считается один раз в начале detectAllPatterns (см. выше) на реально
   // ресэмплированных M15-барах и переиспользуется единообразно всеми

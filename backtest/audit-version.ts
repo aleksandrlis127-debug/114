@@ -52,8 +52,17 @@
  *     (buy при trend='down', sell при trend='up'); раньше любой CHoCH давал
  *     0.75 обоим направлениям. Меняет confidence во всех детекторах на
  *     htfAlignment, поэтому кэш версии 7 отдавал бы прежние результаты.
+ * 9 — «очевидные баги» стратегий ликвидности и возврата к среднему (аудит
+ *     2026-10-02, fix-plan-liquidity-meanreversion.md, пп. F06/F10/F15/F16/F17/F19):
+ *     mean-reversion требует свечу возврата в сторону сделки; liquidity-sweep —
+ *     направленная близость к swing в reversal-гейте; liquidity-sweep-reaction —
+ *     направленные BOS/CHoCH, сессия и OB/FVG-конфлюэнс считаются один раз,
+ *     sessionAgnostic доходит до стадии свипа, проверка направления и повторного
+ *     ухода за экстремум свипа у бара смещения и промежуточного бара. Меняет
+ *     состав и confidence detectAllPatterns у трёх стратегий, поэтому кэш версии 8
+ *     отдавал бы результаты прежних детекторов.
  */
-export const OCCURRENCE_ALGORITHM_VERSION = 8;
+export const OCCURRENCE_ALGORITHM_VERSION = 9;
 
 /**
  * Версия СХЕМЫ выходного JSON horizon-audit.

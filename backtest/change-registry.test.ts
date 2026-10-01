@@ -39,11 +39,21 @@ describe('LOGIC_CHANGE_LOG', () => {
     expect(new Set(ids).size).toBe(ids.length);
   });
 
-  it('the table-schema2 deployment is registered and is the latest freeze', () => {
+  it('the table-schema2 deployment is registered and is not later than the current freeze', () => {
     const rec = LOGIC_CHANGE_LOG.find((e) => e.id === 'horizon-table-schema2');
     expect(rec).toBeDefined();
     expect(rec!.filesChanged).toContain('src/decision/pattern-horizon-table.ts');
-    expect(rec!.frozenAtMs).toBe(currentFreezeMs());
+    // Раньше здесь было toBe(currentFreezeMs()): тест запрещал любую новую запись
+    // после schema2. Новая логическая правка по протоколу обязана сдвигать общую
+    // заморозку вперёд, поэтому проверяется только «не позже текущей».
+    expect(rec!.frozenAtMs).toBeLessThanOrEqual(currentFreezeMs());
+  });
+
+  it('the sweep-family obvious-bugs fix is registered (OCCURRENCE_ALGORITHM_VERSION 8→9)', () => {
+    const rec = LOGIC_CHANGE_LOG.find((e) => e.id === 'sweep-family-obvious-bugs');
+    expect(rec).toBeDefined();
+    expect(rec!.filesChanged).toContain('src/compute/patterns/liquidity-sweep-reaction.ts');
+    expect(rec!.frozenAtMs).toBeLessThanOrEqual(currentFreezeMs());
   });
 });
 

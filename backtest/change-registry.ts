@@ -93,6 +93,21 @@ export const LOGIC_CHANGE_LOG: LogicChangeRecord[] = [
     filesChanged: ['src/decision/pattern-horizon-table.ts'],
     frozenAtMs: Date.UTC(2026, 8, 21),
   },
+  {
+    id: 'sweep-family-obvious-bugs',
+    date: '2026-10-02',
+    description:
+      'Очевидные баги стратегий «ликвидность» и «возврат к среднему» (fix-plan-liquidity-meanreversion.md, F06/F10/F15/F16/F17/F19): mean-reversion требует свечу возврата в сторону сделки; liquidity-sweep — направленная близость к swing в reversal-гейте (buy у swingLow, sell у swingHigh); liquidity-sweep-reaction — BOS/CHoCH только в сторону сделки (BOS в range не подтверждает до решения D2), сессионный множитель и OB/FVG-конфлюэнс применяются один раз (внутри свипа), sessionAgnostic передаётся в стадию свипа, бар смещения проверяется на направление и на повторный уход за экстремум свипа, промежуточный бар — на повторный уход за экстремум. Пороги и веса не менялись. OCCURRENCE_ALGORITHM_VERSION 8→9. Таблица горизонтов не перегенерирована. ВАЖНО: frozenAtMs — день фактического деплоя; при деплое позже 2026-10-02 перенести на реальную дату (задним числом датировать нельзя).',
+    filesChanged: [
+      'src/compute/patterns/pattern-context.ts',
+      'src/compute/patterns/liquidity-sweep.ts',
+      'src/compute/patterns/liquidity-sweep-reaction.ts',
+      'src/compute/patterns/mean-reversion.ts',
+      'src/compute/patterns/index.ts',
+      'backtest/audit-version.ts',
+    ],
+    frozenAtMs: Date.UTC(2026, 9, 2),
+  },
 ];
 
 /**

@@ -4,7 +4,7 @@ import { lastNonNull, volumeRatio, hasReliableVolume } from '@/compute/indicator
 import { atr } from '@/compute/indicators/atr';
 import type { SessionRegime } from '@/compute/session-regime';
 import type { SmartMoneyResult } from '@/compute/indicators/smart-money';
-import { sessionBoost, obFvgConfluenceBonus, intervalSeconds, nearestOppositeZonePrice } from './pattern-context';
+import { nearestOppositeZonePrice, bosAlignsWithDirection, chochAlignsWithDirection } from './pattern-context';
 
 function strengthForConfidence(confidence: number): SignalStrength {
   if (confidence >= 0.75) return 'strong';
@@ -44,10 +44,13 @@ function findSweep(
   session: SessionRegime,
   smartMoney: SmartMoneyResult,
   atrPeriod: number,
+  // F17: пробрасывается во внутренний detectLiquiditySweep, иначе стадия свипа
+  // для крипты получала ×0.6 в азиатские часы, а одиночный liquidity-sweep — нет.
+  sessionAgnostic?: boolean,
 ): SweepFind | null {
   // Try sweep 1 bar back (bar N-1 relative to the current last bar N).
   const oneBarBack = candles.slice(0, -1);
-  const sweep1 = detectLiquiditySweep(oneBarBack, structure, session, smartMoney, 20, atrPeriod);
+  const sweep1 = detectLiquiditySweep(oneBarBack, structure, session, smartMoney, 20, atrPeriod, sessionAgnostic);
   if (sweep1) {
     return { sweepIdx: candles.length - 2, sweepResult: sweep1 };
   }
@@ -57,7 +60,7 @@ function findSweep(
   // not have re-invalidated (closed back through) the swept level.
   if (candles.length < 3) return null;
   const twoBarsBack = candles.slice(0, -2);
-  const sweep2 = detectLiquiditySweep(twoBarsBack, structure, session, smartMoney, 20, atrPeriod);
+  const sweep2 = detectLiquiditySweep(twoBarsBack, structure, session, smartMoney, 20, atrPeriod, sessionAgnostic);
   if (!sweep2) return null;
 
   const sweepIdx = candles.length - 3;
@@ -67,6 +70,16 @@ function findSweep(
     const reinvalidated = sweep2.direction === 'buy' ? intermediate.close < level : intermediate.close > level;
     if (reinvalidated) return null;
   }
+
+  // F19: промежуточный бар не должен повторно уходить за экстремум свип-бара
+  // (buy — ниже его low, sell — выше его high): иначе это новый, более глубокий
+  // прокол, а не удержание уровня после свипа. Проверка по закрытию выше
+  // (reinvalidated) этого не ловит — уход тенью при закрытии внутри проходил.
+  const sweepBar2 = candles[sweepIdx];
+  const reTookExtreme = sweep2.direction === 'buy'
+    ? intermediate.low < sweepBar2.low
+    : intermediate.high > sweepBar2.high;
+  if (reTookExtreme) return null;
 
   return { sweepIdx, sweepResult: sweep2 };
 }
@@ -81,10 +94,12 @@ export function detectLiquiditySweepReaction(
   session: SessionRegime,
   smartMoney: SmartMoneyResult,
   atrPeriod: number = 14,
+  // F17: см. PatternContext.sessionAgnostic в pattern-context.ts.
+  sessionAgnostic?: boolean,
 ): PatternResult | null {
   if (candles.length < 22) return null;
 
-  const found = findSweep(candles, structure, session, smartMoney, atrPeriod);
+  const found = findSweep(candles, structure, session, smartMoney, atrPeriod, sessionAgnostic);
   if (!found) return null;
   const { sweepIdx, sweepResult } = found;
   const sweepBar = candles[sweepIdx];
@@ -104,6 +119,15 @@ export function detectLiquiditySweepReaction(
   // of the reversal, with a body dominating the bar's own range.
   const brokeExtreme = direction === 'buy' ? last.close > sweepBar.high : last.close < sweepBar.low;
   if (!brokeExtreme) return null;
+  // F19: бар смещения обязан идти в сторону разворота (buy — бычья свеча,
+  // sell — медвежья): раньше хватало закрытия за экстремум свип-бара, и
+  // медвежья свеча с гэпом вверх засчитывалась как бычье смещение.
+  const displacementInDirection = direction === 'buy' ? last.close > last.open : last.close < last.open;
+  if (!displacementInDirection) return null;
+  // F19: и не должен уходить за экстремум свип-бара (buy — ниже его low, sell —
+  // выше его high): это повторный, более глубокий прокол, а не реакция.
+  const reTookExtreme = direction === 'buy' ? last.low < sweepBar.low : last.high > sweepBar.high;
+  if (reTookExtreme) return null;
   if (body < atrValue) return null;
   if (body < range * 0.6) return null;
 
@@ -120,29 +144,30 @@ export function detectLiquiditySweepReaction(
   if (volumeReliable && volRatio! < 1.5) return null;
   const volumeMultiplier = volumeReliable ? (volRatio! < 2.0 ? 0.7 : 1.0) : 1.0;
 
-  // MSS/CHoCH confirmation in the direction of the reversal. Only the CHoCH
-  // downweight is applied here — the BOS upweight that used to live in this
-  // detector (confidence *= 1.25 when mssConfirmed) was removed per audit
-  // finding #2/#5 (triple-counted BOS): the same structure.bos fact is
-  // already counted with weight 2.0 via components.bos in
-  // direction-prediction.ts, so re-boosting it a second time here (on top of
-  // components.structure's own weight-2.0 count of the identical fact) gave
-  // one structural event a combined effective weight of ~5.5 vs. genuinely
-  // independent evidence like volume/session/confluence. BOS is now counted
-  // exactly once, at the direction-prediction.ts level.
-  const mssConfirmed = structure.bos;
-  const chochOnly = !structure.bos && structure.choch;
+  // MSS/CHoCH confirmation in the direction of the reversal. BOS здесь НЕ
+  // усиливает confidence (аудит findings #2/#5: один и тот же structure.bos уже
+  // учтён с весом 2.0 в components.bos в direction-prediction.ts) — это только
+  // условие снятия штрафа ×0.75 ниже.
+  // BUGFIX (F15, аудит 2026-10-02): раньше structure.bos и structure.choch
+  // читались без направления, хотя комментарий обещал «в направлении разворота»:
+  // медвежий слом подтверждал бычью реакцию так же, как бычий. Теперь
+  // подтверждает только слом в сторону сделки: BOS — bosAlignsWithDirection
+  // (up→buy, down→sell; BOS в range без поля направления не подтверждает,
+  // решение D2), CHoCH — chochAlignsWithDirection (down→buy, up→sell).
+  const structureConfirmed =
+    bosAlignsWithDirection(structure, direction) || chochAlignsWithDirection(structure, direction);
 
   const displacementConfidence = clamp01((body / atrValue) / 2.0);
   let confidence = (sweepResult.confidence + displacementConfidence) / 2;
 
   if (body >= atrValue * 1.5 && volumeReliable && volRatio! >= 2.5) confidence *= 1.3;
-  if (!mssConfirmed && !chochOnly) confidence *= 0.75;
+  if (!structureConfirmed) confidence *= 0.75;
 
-  const intervalSec = intervalSeconds(candles);
-  const confluenceBonus = obFvgConfluenceBonus(smartMoney, last, direction, atrValue, intervalSec);
-  confidence *= 1 + confluenceBonus;
-  confidence *= sessionBoost(session);
+  // BUGFIX (F16, аудит 2026-10-02): сессионный множитель (×0.6 / sessionBoost)
+  // и OB/FVG-конфлюэнс уже входят в sweepResult.confidence (см.
+  // detectLiquiditySweep) — раньше reaction умножала на них второй раз
+  // (sessionBoost(session) и 1 + obFvgConfluenceBonus), то есть одно и то же
+  // условие считалось дважды. Теперь они применяются один раз, внутри свипа.
   confidence *= volumeMultiplier;
 
   confidence = clamp01(confidence);
