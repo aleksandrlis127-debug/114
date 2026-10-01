@@ -19,7 +19,9 @@
  * Сейчас инструментированы: hammer, inverted-hammer, hanging-man,
  * shooting-star (single.ts), mean-reversion, tweezer-bottom/top (double.ts),
  * abandoned-baby-bottom/top (triple.ts), falling-three-methods
- * (continuation.ts) и macd-deceleration-continuation. Остальные детекторы в
+ * (continuation.ts), macd-deceleration-continuation, liquidity-sweep и
+ * liquidity-sweep-reaction (внутренние вызовы свипа из реакции — отдельная группа
+ * liquidity-sweep-inner, на бар приходится до двух таких вызовов). Остальные детекторы в
  * воронке НЕ участвуют — добавляйте `gate()` по тому же образцу.
  */
 let sink: Map<string, number> | null = null;
@@ -41,4 +43,24 @@ export function isGateTraceActive(): boolean {
 
 export function gate(name: string): void {
   if (sink !== null) sink.set(name, (sink.get(name) ?? 0) + 1);
+}
+
+// Подмена имени детектора в gate-именах на время вызова. Нужна, когда один
+// детектор вызывает другой внутри себя (liquidity-sweep-reaction → liquidity-sweep):
+// без неё внутренние вызовы свипа смешались бы со standalone-свипом в одной группе.
+let detectorOverride: string | null = null;
+
+export function withGateDetector<T>(detector: string, fn: () => T): T {
+  const prev = detectorOverride;
+  detectorOverride = detector;
+  try {
+    return fn();
+  } finally {
+    detectorOverride = prev;
+  }
+}
+
+/** gate() с именем детектора, которое можно подменить через withGateDetector. */
+export function gateStage(detector: string, stage: string): void {
+  if (sink !== null) gate(`${detectorOverride ?? detector}:${stage}`);
 }

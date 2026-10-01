@@ -4,6 +4,7 @@ import { atr } from '@/compute/indicators/atr';
 import type { SessionRegime } from '@/compute/session-regime';
 import type { SmartMoneyResult } from '@/compute/indicators/smart-money';
 import { checkTrendStrength } from './trend-utils';
+import { gateStage } from './gate-trace';
 import {
   sessionBoost,
   htfAlignment,
@@ -42,11 +43,13 @@ export function detectLiquiditySweep(
   // D1: см. PatternContext.sessionAgnostic в pattern-context.ts.
   sessionAgnostic?: boolean,
 ): PatternResult | null {
+  gateStage('liquidity-sweep', '00-evaluated');
   if (candles.length < lookback + 1) return null;
 
   const atrArr = atr(candles, atrPeriod);
   const atrValue = lastNonNull(atrArr);
   if (atrValue === null || atrValue <= 0) return null;
+  gateStage('liquidity-sweep', '01-indicators');
 
   const slice = candles.slice(-lookback - 1, -1);
   const recentHigh = Math.max(...slice.map((c) => c.high));
@@ -68,6 +71,7 @@ export function detectLiquiditySweep(
   }
 
   if (direction === null) return null;
+  gateStage('liquidity-sweep', '02-sweep-geometry');
 
   // Глубина прокола в единицах ATR — вычисляется здесь (до тренд-контекста),
   // потому что сценарий "разворот у ключевого уровня" ниже сам зависит от
@@ -106,6 +110,7 @@ export function detectLiquiditySweep(
   const isReversalAtKeyLevel =
     isNearSwingLevelForDirection(structure, last, atrValue, direction) && depthInAtr >= 0.5;
   if (!isContinuation && !isReversalAtKeyLevel) return null;
+  gateStage('liquidity-sweep', '03-context');
   const setupType: 'continuation' | 'reversal-at-key-level' = isContinuation
     ? 'continuation'
     : 'reversal-at-key-level';
@@ -115,6 +120,7 @@ export function detectLiquiditySweep(
   //    либо настоящий пробой структуры в противоположную сторону).
   if (depthInAtr > MAX_DEPTH_ATR) return null;
   if (depthInAtr < MIN_DEPTH_ATR) return null;
+  gateStage('liquidity-sweep', '04-depth');
 
   // 5. Объёмный фильтр — НЕ жёсткий блок, а условное усиление (аудит,
   //    находка №1). На споте Форекс через REST-провайдеров (TwelveData/
@@ -129,6 +135,7 @@ export function detectLiquiditySweep(
   const volumeReliable = hasReliableVolume(candles, lastIdx, 20);
   const volRatio = volumeReliable ? volumeRatio(candles, lastIdx, 20) : null;
   if (volumeReliable && volRatio! < MIN_VOLUME_RATIO) return null;
+  gateStage('liquidity-sweep', '05-volume');
 
   // 6. Конфлюэнс с OB/FVG старшего ТФ либо со swing-уровнем структуры —
   //    не hard-блок, а понижающий/повышающий мультипликатор confidence.
@@ -161,6 +168,7 @@ export function detectLiquiditySweep(
 
   confidence = clamp01(confidence);
   if (confidence < ENTRY_THRESHOLD) return null;
+  gateStage('liquidity-sweep', '06-confidence');
 
   return {
     name: 'liquidity-sweep',

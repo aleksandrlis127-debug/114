@@ -3,6 +3,10 @@ import { beginGateTrace, endGateTrace, gate, isGateTraceActive } from '@/compute
 import { auditFeatureSet, buildOccurrences, formatGateFunnel, HORIZON_GRIDS } from './horizon-audit';
 import { generateRandomWalk } from './synthetic/random-walk';
 import { DEFAULT_INDICATOR_CONFIG } from '@/types/domain';
+import { computeStructure } from '@/compute/indicators/trend-structure';
+import { detectLiquiditySweep } from '@/compute/patterns/liquidity-sweep';
+import { detectLiquiditySweepReaction } from '@/compute/patterns/liquidity-sweep-reaction';
+import type { SmartMoneyResult } from '@/compute/indicators/smart-money';
 
 describe('gate-trace', () => {
   it('вне трассировки gate() ничего не делает и не накапливает', () => {
@@ -79,6 +83,54 @@ describe('инструментация детекторов не меняет р
       stages.sort(([a], [b]) => (a < b ? -1 : 1));
       for (let i = 1; i < stages.length; i++) {
         expect(stages[i][1], `${det}: ${stages[i][0]} не может превышать ${stages[i - 1][0]}`).toBeLessThanOrEqual(stages[i - 1][1]);
+      }
+    }
+  });
+});
+
+describe('воронка liquidity-sweep / liquidity-sweep-reaction', () => {
+  const EMPTY_SM: SmartMoneyResult = {
+    orderBlocks: [], fvgs: [], inversionFvgs: [], breakerBlocks: [], rejectionBlocks: [], bosEvents: [],
+  };
+
+  it('трассировка не меняет результат; внутренние вызовы свипа считаются отдельной группой', () => {
+    const candles = generateRandomWalk({ bars: 1500, seed: 7, noiseFraction: 0.1 });
+    const run = () => {
+      const out: unknown[] = [];
+      for (let i = 60; i < candles.length; i++) {
+        const slice = candles.slice(0, i + 1);
+        const st = computeStructure(slice);
+        out.push(detectLiquiditySweep(slice, st, 'london', EMPTY_SM));
+        out.push(detectLiquiditySweepReaction(slice, st, 'london', EMPTY_SM));
+      }
+      return out;
+    };
+    const plain = run();
+    beginGateTrace();
+    const traced = run();
+    const counts = endGateTrace();
+    expect(traced).toEqual(plain);
+
+    const n = candles.length - 60;
+    expect(counts.get('liquidity-sweep:00-evaluated')).toBe(n);
+    expect(counts.get('liquidity-sweep-reaction:00-evaluated')).toBe(n);
+    // внутри реакции свип вызывается 1–2 раза на бар и считается отдельно
+    expect(counts.get('liquidity-sweep-inner:00-evaluated')).toBeGreaterThanOrEqual(n);
+    expect(counts.get('liquidity-sweep-inner:00-evaluated')).toBeLessThanOrEqual(2 * n);
+    // standalone-группа не загрязнена внутренними вызовами
+    expect(counts.get('liquidity-sweep:00-evaluated')).toBe(n);
+
+    // воронки монотонны по этапам внутри каждой группы
+    const byDet = new Map<string, [string, number][]>();
+    for (const [k, v] of counts) {
+      const [det, stage] = k.split(':');
+      if (!byDet.has(det)) byDet.set(det, []);
+      byDet.get(det)!.push([stage, v]);
+    }
+    for (const [det, stages] of byDet) {
+      stages.sort(([a], [b]) => (a < b ? -1 : 1));
+      for (let i = 1; i < stages.length; i++) {
+        expect(stages[i][1], `${det}: ${stages[i][0]}`).toBeLessThanOrEqual(stages[i - 1][1]);
       }
     }
   });

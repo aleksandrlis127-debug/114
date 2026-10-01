@@ -4,6 +4,7 @@ import { lastNonNull, volumeRatio, hasReliableVolume } from '@/compute/indicator
 import { atr } from '@/compute/indicators/atr';
 import type { SessionRegime } from '@/compute/session-regime';
 import type { SmartMoneyResult } from '@/compute/indicators/smart-money';
+import { gateStage, withGateDetector } from './gate-trace';
 import { nearestOppositeZonePrice, bosAlignsWithDirection, chochAlignsWithDirection } from './pattern-context';
 
 function strengthForConfidence(confidence: number): SignalStrength {
@@ -50,7 +51,9 @@ function findSweep(
 ): SweepFind | null {
   // Try sweep 1 bar back (bar N-1 relative to the current last bar N).
   const oneBarBack = candles.slice(0, -1);
-  const sweep1 = detectLiquiditySweep(oneBarBack, structure, session, smartMoney, 20, atrPeriod, sessionAgnostic);
+  const sweep1 = withGateDetector('liquidity-sweep-inner', () =>
+    detectLiquiditySweep(oneBarBack, structure, session, smartMoney, 20, atrPeriod, sessionAgnostic),
+  );
   if (sweep1) {
     return { sweepIdx: candles.length - 2, sweepResult: sweep1 };
   }
@@ -60,7 +63,9 @@ function findSweep(
   // not have re-invalidated (closed back through) the swept level.
   if (candles.length < 3) return null;
   const twoBarsBack = candles.slice(0, -2);
-  const sweep2 = detectLiquiditySweep(twoBarsBack, structure, session, smartMoney, 20, atrPeriod, sessionAgnostic);
+  const sweep2 = withGateDetector('liquidity-sweep-inner', () =>
+    detectLiquiditySweep(twoBarsBack, structure, session, smartMoney, 20, atrPeriod, sessionAgnostic),
+  );
   if (!sweep2) return null;
 
   const sweepIdx = candles.length - 3;
@@ -97,10 +102,12 @@ export function detectLiquiditySweepReaction(
   // F17: см. PatternContext.sessionAgnostic в pattern-context.ts.
   sessionAgnostic?: boolean,
 ): PatternResult | null {
+  gateStage('liquidity-sweep-reaction', '00-evaluated');
   if (candles.length < 22) return null;
 
   const found = findSweep(candles, structure, session, smartMoney, atrPeriod, sessionAgnostic);
   if (!found) return null;
+  gateStage('liquidity-sweep-reaction', '01-sweep-found');
   const { sweepIdx, sweepResult } = found;
   const sweepBar = candles[sweepIdx];
   const direction = sweepResult.direction;
@@ -119,17 +126,21 @@ export function detectLiquiditySweepReaction(
   // of the reversal, with a body dominating the bar's own range.
   const brokeExtreme = direction === 'buy' ? last.close > sweepBar.high : last.close < sweepBar.low;
   if (!brokeExtreme) return null;
+  gateStage('liquidity-sweep-reaction', '02-broke-extreme');
   // F19: бар смещения обязан идти в сторону разворота (buy — бычья свеча,
   // sell — медвежья): раньше хватало закрытия за экстремум свип-бара, и
   // медвежья свеча с гэпом вверх засчитывалась как бычье смещение.
   const displacementInDirection = direction === 'buy' ? last.close > last.open : last.close < last.open;
   if (!displacementInDirection) return null;
+  gateStage('liquidity-sweep-reaction', '03-displacement-direction');
   // F19: и не должен уходить за экстремум свип-бара (buy — ниже его low, sell —
   // выше его high): это повторный, более глубокий прокол, а не реакция.
   const reTookExtreme = direction === 'buy' ? last.low < sweepBar.low : last.high > sweepBar.high;
   if (reTookExtreme) return null;
+  gateStage('liquidity-sweep-reaction', '04-no-retake');
   if (body < atrValue) return null;
   if (body < range * 0.6) return null;
+  gateStage('liquidity-sweep-reaction', '05-body');
 
   // Volume tiering (audit finding #1) — same "not a hard gate on Forex"
   // logic as detectLiquiditySweep(): <1.5x is a hard block only when volume
@@ -142,6 +153,7 @@ export function detectLiquiditySweepReaction(
   const volumeReliable = hasReliableVolume(candles, lastIdx, 20);
   const volRatio = volumeReliable ? volumeRatio(candles, lastIdx, 20) : null;
   if (volumeReliable && volRatio! < 1.5) return null;
+  gateStage('liquidity-sweep-reaction', '06-volume');
   const volumeMultiplier = volumeReliable ? (volRatio! < 2.0 ? 0.7 : 1.0) : 1.0;
 
   // MSS/CHoCH confirmation in the direction of the reversal. BOS здесь НЕ
@@ -172,6 +184,7 @@ export function detectLiquiditySweepReaction(
 
   confidence = clamp01(confidence);
   if (confidence < ENTRY_THRESHOLD) return null;
+  gateStage('liquidity-sweep-reaction', '07-confidence');
 
   // Structural SL/TP inputs (audit finding #6) — computed here (not in
   // signal-builder.ts) because smartMoney is already in scope, sparing the
