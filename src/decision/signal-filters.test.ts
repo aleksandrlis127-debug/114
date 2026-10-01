@@ -270,3 +270,35 @@ describe('applySignalFilters — regime/ADX gate (BUGFIX аудит 2026-09-05)'
     expect(result.scoreMultiplier).toBe(1);
   });
 });
+
+describe('applySignalFilters — mean-reversion exempt from range ADX veto (D1=A)', () => {
+  const mrPattern = (direction: 'buy' | 'sell'): PatternResult => ({
+    name: 'mean-reversion', direction, confidence: 0.7, strength: 'strong', time: 1000,
+  });
+  const rangeSnap = (adxValue: number, patterns: PatternResult[]): Snapshot => {
+    const base = makeSnapshot();
+    return makeSnapshot({
+      regime: 'range',
+      patterns,
+      indicators: { ...base.indicators, adx: adxValue },
+    });
+  };
+  const candles = Array.from({ length: 30 }, (_, i) => ({
+    time: i * 60, open: 100, high: 101, low: 99, close: 100, volume: 1,
+  })) as Candle[];
+
+  it('still vetoes a non-mean-reversion signal in range with ADX < 20', () => {
+    const r = applySignalFilters(candles, rangeSnap(12, []), 'buy', 0.5);
+    expect(r.invalidated).toBe(true);
+  });
+
+  it('does not veto when mean-reversion in the signal direction is present', () => {
+    const r = applySignalFilters(candles, rangeSnap(12, [mrPattern('buy')]), 'buy', 0.5);
+    expect(r.invalidated).toBe(false);
+  });
+
+  it('does not exempt when mean-reversion points the opposite way', () => {
+    const r = applySignalFilters(candles, rangeSnap(12, [mrPattern('sell')]), 'buy', 0.5);
+    expect(r.invalidated).toBe(true);
+  });
+});

@@ -108,6 +108,14 @@ export const LOGIC_CHANGE_LOG: LogicChangeRecord[] = [
     ],
     frozenAtMs: Date.UTC(2026, 9, 2),
   },
+  {
+    id: 'mean-reversion-regime-veto-exempt',
+    date: '2026-10-02',
+    description:
+      'Решение D1=A (fix-plan-liquidity-meanreversion.md, F02): сигнал с паттерном mean-reversion в направлении сделки исключён из range-вето/штрафа по ADX в signal-filters (детектор требует ADX<=25 и бустит ADX<15, а вето режет именно флэт). Остальные паттерны и режимы (в т.ч. high-volatility) не затронуты. Пороги и веса не менялись. OCCURRENCE_ALGORITHM_VERSION 9→10 (occurrences детекторов не меняются, меняется итоговое решение). Таблица горизонтов не перегенерирована. ВАЖНО: frozenAtMs — день фактического деплоя; при деплое позже 2026-10-02 перенести на реальную дату.',
+    filesChanged: ['src/decision/signal-filters.ts', 'backtest/audit-version.ts'],
+    frozenAtMs: Date.UTC(2026, 9, 2),
+  },
 ];
 
 /**

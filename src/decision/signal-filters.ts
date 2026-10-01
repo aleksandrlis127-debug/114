@@ -129,7 +129,14 @@ export function applySignalFilters(
   // активна до накопления MIN_SAMPLES. Теперь слабый/угасающий тренд в
   // диапазоне режет score явным, детерминированным множителем, а не ждёт,
   // пока модель наберёт статистику молча теряя деньги.
-  if (toggles.regimeGate && snapshot.regime === 'range') {
+  // D1=A (план fix-plan-liquidity-meanreversion.md, F02): mean-reversion по
+  // определению торгуется во флэте с низким ADX — range-вето режет ровно его
+  // рабочий режим. Исключаем ТОЛЬКО когда он есть среди паттернов и совпадает
+  // с направлением сигнала; пороги и веса не менялись.
+  const hasMeanReversionInDirection = snapshot.patterns.some(
+    (p) => p.name === 'mean-reversion' && p.direction === direction,
+  );
+  if (toggles.regimeGate && snapshot.regime === 'range' && !hasMeanReversionInDirection) {
     const adxValue = snapshot.indicators.adx;
     if (adxValue !== null && adxValue < REGIME_GATE_HARD_VETO_ADX_THRESHOLD) {
       // Hard veto: below Wilder's "no trend" threshold, a trend/reaction
