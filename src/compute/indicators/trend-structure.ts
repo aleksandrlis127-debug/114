@@ -39,6 +39,7 @@ export function computeStructure(candles: Candle[], lookback: number = 50, isClo
 
   let bos = false;
   let choch = false;
+  let bosDirection: 'up' | 'down' | undefined;
 
   // Range has no established direction to change, so a breakout either way
   // is a fresh BOS (structure forming where none existed), never a CHoCH —
@@ -48,19 +49,31 @@ export function computeStructure(candles: Candle[], lookback: number = 50, isClo
   // impulse-breakout.ts and elsewhere), which had no market justification
   // and produced a systematic bullish skew on every range-regime signal.
   if (trend === 'range') {
-    bos =
-      (lastCandle.close > swingHigh && prevCandle.close <= swingHigh) ||
-      (lastCandle.close < swingLow && prevCandle.close >= swingLow);
+    const brokeUp = lastCandle.close > swingHigh && prevCandle.close <= swingHigh;
+    const brokeDown = lastCandle.close < swingLow && prevCandle.close >= swingLow;
+    bos = brokeUp || brokeDown;
+    if (brokeUp) bosDirection = 'up';
+    else if (brokeDown) bosDirection = 'down';
     choch = false;
   }
   if (trend === 'up') {
     bos = lastCandle.close > swingHigh && prevCandle.close <= swingHigh;
+    if (bos) bosDirection = 'up';
     choch = lastCandle.close < swingLow && prevCandle.close >= swingLow;
   }
   if (trend === 'down') {
     bos = lastCandle.close < swingLow && prevCandle.close >= swingLow;
+    if (bos) bosDirection = 'down';
     choch = lastCandle.close > swingHigh && prevCandle.close <= swingHigh;
   }
 
-  return { trend, bos, choch, swingHigh, swingLow, provisional: !isClosed };
+  return {
+    trend,
+    bos,
+    choch,
+    ...(bosDirection ? { bosDirection } : {}),
+    swingHigh,
+    swingLow,
+    provisional: !isClosed,
+  };
 }

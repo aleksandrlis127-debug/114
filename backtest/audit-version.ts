@@ -62,7 +62,7 @@
  *     состав и confidence detectAllPatterns у трёх стратегий, поэтому кэш версии 8
  *     отдавал бы результаты прежних детекторов.
  */
-export const OCCURRENCE_ALGORITHM_VERSION = 10;
+export const OCCURRENCE_ALGORITHM_VERSION = 11;
 
 /**
  * Версия СХЕМЫ выходного JSON horizon-audit.

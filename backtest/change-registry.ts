@@ -116,6 +116,19 @@ export const LOGIC_CHANGE_LOG: LogicChangeRecord[] = [
     filesChanged: ['src/decision/signal-filters.ts', 'backtest/audit-version.ts'],
     frozenAtMs: Date.UTC(2026, 9, 2),
   },
+  {
+    id: 'market-structure-bos-direction',
+    date: '2026-10-02',
+    description:
+      'Решение D2 (fix-plan-liquidity-meanreversion.md, F15): MarketStructure получила опциональное поле bosDirection (up/down), computeStructure заполняет его при bos=true, в том числе для пробоя из range. bosAlignsWithDirection использует bosDirection, если оно есть; поэтому BOS в range теперь подтверждает liquidity-sweep-reaction в сторону пробоя (раньше не подтверждал вовсе). Других потребителей bos поведение не меняется (они читают trend). Пороги и веса не менялись. OCCURRENCE_ALGORITHM_VERSION 10→11. Таблица горизонтов не перегенерирована. ВАЖНО: frozenAtMs — день фактического деплоя; при деплое позже 2026-10-02 перенести на реальную дату.',
+    filesChanged: [
+      'src/types/domain.ts',
+      'src/compute/indicators/trend-structure.ts',
+      'src/compute/patterns/pattern-context.ts',
+      'backtest/audit-version.ts',
+    ],
+    frozenAtMs: Date.UTC(2026, 9, 2),
+  },
 ];
 
 /**

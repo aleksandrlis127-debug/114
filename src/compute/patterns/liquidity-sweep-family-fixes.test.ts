@@ -43,6 +43,7 @@ function mirrorCandles(candles: Candle[]): Candle[] {
 function mirrorStructure(s: MarketStructure): MarketStructure {
   return {
     ...s,
+    bosDirection: s.bosDirection === 'up' ? 'down' : s.bosDirection === 'down' ? 'up' : undefined,
     trend: s.trend === 'up' ? 'down' : s.trend === 'down' ? 'up' : 'range',
     swingHigh: s.swingLow == null ? null : 200 - s.swingLow,
     swingLow: s.swingHigh == null ? null : 200 - s.swingHigh,
@@ -118,11 +119,19 @@ describe('F15 — liquidity-sweep-reaction: BOS/CHoCH учитываются т�
     expect(bullishChoch!.confidence).toBeGreaterThan(bearishBos!.confidence);
   });
 
-  it('BOS в range (направление неизвестно) не подтверждает реакцию (решение D2)', () => {
+  it('BOS в range без bosDirection не подтверждает реакцию (решение D2)', () => {
     const rangeBos = run({ trend: 'range', bos: true });
     const noSignal = run({ trend: 'down' });
     expect(rangeBos).not.toBeNull();
     expect(rangeBos!.confidence).toBeCloseTo(noSignal!.confidence, 10);
+  });
+
+  it('D2: BOS в range с bosDirection подтверждает реакцию только в свою сторону', () => {
+    const noSignal = run({ trend: 'down' });
+    const upBos = run({ trend: 'range', bos: true, bosDirection: 'up' });
+    const downBos = run({ trend: 'range', bos: true, bosDirection: 'down' });
+    expect(upBos!.confidence).toBeGreaterThan(noSignal!.confidence);
+    expect(downBos!.confidence).toBeCloseTo(noSignal!.confidence, 10);
   });
 
   it('bosAlignsWithDirection: up→buy, down→sell, range и отсутствие BOS — нет', () => {
@@ -132,6 +141,14 @@ describe('F15 — liquidity-sweep-reaction: BOS/CHoCH учитываются т�
     expect(bosAlignsWithDirection(struct({ trend: 'down', bos: true }), 'buy')).toBe(false);
     expect(bosAlignsWithDirection(struct({ trend: 'range', bos: true }), 'buy')).toBe(false);
     expect(bosAlignsWithDirection(struct({ trend: 'up', bos: false }), 'buy')).toBe(false);
+  });
+
+  it('D2: bosDirection главнее trend; BOS в range с направлением подтверждает свою сторону', () => {
+    expect(bosAlignsWithDirection(struct({ trend: 'range', bos: true, bosDirection: 'up' }), 'buy')).toBe(true);
+    expect(bosAlignsWithDirection(struct({ trend: 'range', bos: true, bosDirection: 'up' }), 'sell')).toBe(false);
+    expect(bosAlignsWithDirection(struct({ trend: 'range', bos: true, bosDirection: 'down' }), 'sell')).toBe(true);
+    expect(bosAlignsWithDirection(struct({ trend: 'range', bos: true, bosDirection: 'down' }), 'buy')).toBe(false);
+    expect(bosAlignsWithDirection(struct({ trend: 'range', bos: false, bosDirection: 'up' }), 'buy')).toBe(false);
   });
 });
 

@@ -49,7 +49,7 @@ function mirrorTrend(t: MarketStructure['trend']): MarketStructure['trend'] {
 }
 
 function mirrorStructure(s: MarketStructure): MarketStructure {
-  return { ...s, trend: mirrorTrend(s.trend), swingHigh: null, swingLow: null };
+  return { ...s, bosDirection: s.bosDirection === 'up' ? 'down' : s.bosDirection === 'down' ? 'up' : undefined, trend: mirrorTrend(s.trend), swingHigh: null, swingLow: null };
 }
 
 const EMPTY_SMART_MONEY: SmartMoneyResult = {

@@ -207,6 +207,9 @@ export interface MarketStructure {
   trend: 'up' | 'down' | 'range';
   bos: boolean;
   choch: boolean;
+  // D2: направление пробоя, когда bos=true ('up' — close выше swingHigh, 'down' — ниже
+  // swingLow). Опционально: старые литералы/сохранённые снапшоты без поля валидны.
+  bosDirection?: 'up' | 'down';
   swingHigh: number | null;
   swingLow: number | null;
   provisional: boolean;
@@ -903,6 +906,7 @@ export const marketStructureSchema = z.object({
   trend: z.enum(['up', 'down', 'range']),
   bos: z.boolean(),
   choch: z.boolean(),
+  bosDirection: z.enum(['up', 'down']).optional(),
   swingHigh: z.number().nullable(),
   swingLow: z.number().nullable(),
 });

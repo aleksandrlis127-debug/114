@@ -359,6 +359,7 @@ describe('computeStructure', () => {
     expect(s.trend).toBe('range');
     expect(s.bos).toBe(true);
     expect(s.choch).toBe(false);
+    expect(s.bosDirection).toBe('up');
   });
 
   it('treats a downside range breakout as BOS too, not CHoCH (symmetric with the upside case)', () => {
@@ -374,6 +375,11 @@ describe('computeStructure', () => {
     // Before the fix this was `choch: true, bos: false` — the asymmetric bug.
     expect(s.bos).toBe(true);
     expect(s.choch).toBe(false);
+    expect(s.bosDirection).toBe('down');
+  });
+
+  it('does not set bosDirection when there is no BOS', () => {
+    expect(computeStructure(rangeBoundCandles()).bosDirection).toBeUndefined();
   });
 });
 
