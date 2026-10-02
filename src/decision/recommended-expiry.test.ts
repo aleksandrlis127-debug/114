@@ -133,17 +133,20 @@ describe('recommendedExpiry — таблица горизонтов', () => {
   });
 
   it('no-evidence НЕ подменяет fallback и НЕ подавляет сигнал', () => {
-    // BUGFIX (перегенерация после A′.5): inside-bar на crypto на реальных
-    // данных оказался genuine rejected (48.8%, p=0.0000, N=84716) — заменён
-    // на shooting-star, который на новой калибровке остаётся no-evidence.
-    expect(PATTERN_HORIZON_TABLE.crypto['shooting-star']?.status).toBe('no-evidence');
-    expect(recommendedExpiry('shooting-star', 'crypto', '1m', 2, 100)).toBe(60);
-    expect(isPatternHorizonRejected('shooting-star', 'crypto')).toBe(false);
+    // Запись подставляется явно: сгенерированная таблица меняется с каждой
+    // перегенерацией (после версии 15 shooting-star из crypto пропал).
+    withRecord('crypto', 'shooting-star', noEvidenceRec(), () => {
+      expect(lookupPatternHorizon('shooting-star', 'crypto')?.status).toBe('no-evidence');
+      expect(recommendedExpiry('shooting-star', 'crypto', '1m', 2, 100)).toBe(60);
+      expect(isPatternHorizonRejected('shooting-star', 'crypto')).toBe(false);
+    });
   });
 
   it('rejected уходит в fallback по горизонту (подавление — отдельным гейтом)', () => {
-    expect(PATTERN_HORIZON_TABLE.crypto['impulse-breakout']?.status).toBe('rejected');
-    expect(recommendedExpiry('impulse-breakout', 'crypto', '1m', 2, 100)).toBe(60);
+    withRecord('crypto', 'impulse-breakout', rejectedRec(), () => {
+      expect(lookupPatternHorizon('impulse-breakout', 'crypto')?.status).toBe('rejected');
+      expect(recommendedExpiry('impulse-breakout', 'crypto', '1m', 2, 100)).toBe(60);
+    });
   });
 
   it('РЕГРЕССИЯ: класс актива не протекает между таблицами', () => {
