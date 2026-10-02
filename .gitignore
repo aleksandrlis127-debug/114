@@ -38,3 +38,4 @@ backtest/output-run/
 # Каталоги сторонних агентов/IDE
 .kilo/
 .DS_Store
+*.patch
