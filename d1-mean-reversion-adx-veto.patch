@@ -1,0 +1,92 @@
+diff --git a/backtest/audit-version.ts b/backtest/audit-version.ts
+index 93f9278..cd86dcf 100644
+--- a/backtest/audit-version.ts
++++ b/backtest/audit-version.ts
+@@ -62,7 +62,7 @@
+  *     состав и confidence detectAllPatterns у трёх стратегий, поэтому кэш версии 8
+  *     отдавал бы результаты прежних детекторов.
+  */
+-export const OCCURRENCE_ALGORITHM_VERSION = 9;
++export const OCCURRENCE_ALGORITHM_VERSION = 10;
+ 
+ /**
+  * Версия СХЕМЫ выходного JSON horizon-audit.
+diff --git a/backtest/change-registry.ts b/backtest/change-registry.ts
+index 2079232..729b4dd 100644
+--- a/backtest/change-registry.ts
++++ b/backtest/change-registry.ts
+@@ -108,6 +108,14 @@ export const LOGIC_CHANGE_LOG: LogicChangeRecord[] = [
+     ],
+     frozenAtMs: Date.UTC(2026, 9, 2),
+   },
++  {
++    id: 'mean-reversion-regime-veto-exempt',
++    date: '2026-10-02',
++    description:
++      'Решение D1=A (fix-plan-liquidity-meanreversion.md, F02): сигнал с паттерном mean-reversion в направлении сделки исключён из range-вето/штрафа по ADX в signal-filters (детектор требует ADX<=25 и бустит ADX<15, а вето режет именно флэт). Остальные паттерны и режимы (в т.ч. high-volatility) не затронуты. Пороги и веса не менялись. OCCURRENCE_ALGORITHM_VERSION 9→10 (occurrences детекторов не меняются, меняется итоговое решение). Таблица горизонтов не перегенерирована. ВАЖНО: frozenAtMs — день фактического деплоя; при деплое позже 2026-10-02 перенести на реальную дату.',
++    filesChanged: ['src/decision/signal-filters.ts', 'backtest/audit-version.ts'],
++    frozenAtMs: Date.UTC(2026, 9, 2),
++  },
+ ];
+ 
+ /**
+diff --git a/src/decision/signal-filters.test.ts b/src/decision/signal-filters.test.ts
+index d58eead..b2ce797 100644
+--- a/src/decision/signal-filters.test.ts
++++ b/src/decision/signal-filters.test.ts
+@@ -270,3 +270,35 @@ describe('applySignalFilters — regime/ADX gate (BUGFIX аудит 2026-09-05)'
+     expect(result.scoreMultiplier).toBe(1);
+   });
+ });
++
++describe('applySignalFilters — mean-reversion exempt from range ADX veto (D1=A)', () => {
++  const mrPattern = (direction: 'buy' | 'sell'): PatternResult => ({
++    name: 'mean-reversion', direction, confidence: 0.7, strength: 'strong', time: 1000,
++  });
++  const rangeSnap = (adxValue: number, patterns: PatternResult[]): Snapshot => {
++    const base = makeSnapshot();
++    return makeSnapshot({
++      regime: 'range',
++      patterns,
++      indicators: { ...base.indicators, adx: adxValue },
++    });
++  };
++  const candles = Array.from({ length: 30 }, (_, i) => ({
++    time: i * 60, open: 100, high: 101, low: 99, close: 100, volume: 1,
++  })) as Candle[];
++
++  it('still vetoes a non-mean-reversion signal in range with ADX < 20', () => {
++    const r = applySignalFilters(candles, rangeSnap(12, []), 'buy', 0.5);
++    expect(r.invalidated).toBe(true);
++  });
++
++  it('does not veto when mean-reversion in the signal direction is present', () => {
++    const r = applySignalFilters(candles, rangeSnap(12, [mrPattern('buy')]), 'buy', 0.5);
++    expect(r.invalidated).toBe(false);
++  });
++
++  it('does not exempt when mean-reversion points the opposite way', () => {
++    const r = applySignalFilters(candles, rangeSnap(12, [mrPattern('sell')]), 'buy', 0.5);
++    expect(r.invalidated).toBe(true);
++  });
++});
+diff --git a/src/decision/signal-filters.ts b/src/decision/signal-filters.ts
+index 2568d4a..49e7424 100644
+--- a/src/decision/signal-filters.ts
++++ b/src/decision/signal-filters.ts
+@@ -129,7 +129,14 @@ export function applySignalFilters(
+   // активна до накопления MIN_SAMPLES. Теперь слабый/угасающий тренд в
+   // диапазоне режет score явным, детерминированным множителем, а не ждёт,
+   // пока модель наберёт статистику молча теряя деньги.
+-  if (toggles.regimeGate && snapshot.regime === 'range') {
++  // D1=A (план fix-plan-liquidity-meanreversion.md, F02): mean-reversion по
++  // определению торгуется во флэте с низким ADX — range-вето режет ровно его
++  // рабочий режим. Исключаем ТОЛЬКО когда он есть среди паттернов и совпадает
++  // с направлением сигнала; пороги и веса не менялись.
++  const hasMeanReversionInDirection = snapshot.patterns.some(
++    (p) => p.name === 'mean-reversion' && p.direction === direction,
++  );
++  if (toggles.regimeGate && snapshot.regime === 'range' && !hasMeanReversionInDirection) {
+     const adxValue = snapshot.indicators.adx;
+     if (adxValue !== null && adxValue < REGIME_GATE_HARD_VETO_ADX_THRESHOLD) {
+       // Hard veto: below Wilder's "no trend" threshold, a trend/reaction

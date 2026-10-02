@@ -73,6 +73,18 @@ export function detectLiquiditySweep(
   if (direction === null) return null;
   gateStage('liquidity-sweep', '02-sweep-geometry');
 
+  // F12 (Этап 3, fix-plan-liquidity-meanreversion.md): геометрия выше засчитывала
+  // свип, даже если закрытие едва вернулось за уровень (на 0.01) и осталось у
+  // самого экстремума прокола — это не отказ от прокола, а касание. Теперь
+  // требуется отказ: закрытие бара в «возвратной» половине его диапазона
+  // (buy — не ниже середины бара, sell — не выше середины). Середина (0.5) —
+  // не подбираемый порог, а симметричная граница между «закрылся у экстремума
+  // прокола» и «закрылся от него»; ни порог глубины, ни веса не менялись.
+  const barMid = (last.high + last.low) / 2;
+  const rejected = direction === 'buy' ? last.close >= barMid : last.close <= barMid;
+  if (!rejected) return null;
+  gateStage('liquidity-sweep', '02b-rejection');
+
   // Глубина прокола в единицах ATR — вычисляется здесь (до тренд-контекста),
   // потому что сценарий "разворот у ключевого уровня" ниже сам зависит от
   // depthInAtr (спецификация требует ≥0.5×ATR именно для разворотных
@@ -98,7 +110,10 @@ export function detectLiquiditySweep(
   //       "реакцией на снятие ликвидности" в первую очередь.
   const trendDirection = direction === 'buy' ? 'up' : 'down';
   const structureAligned = structure.trend === trendDirection;
-  const barTrendStrength = checkTrendStrength(candles, trendDirection, 7);
+  // F13: окно «5 из 7» считается по 7 барам ДО свип-бара. Раньше последним в
+  // окне стояла сама свип-свеча (чьё направление определяется ею же), что
+  // подмешивало в «тренд-контекст» результат самого свипа.
+  const barTrendStrength = checkTrendStrength(candles.slice(0, -1), trendDirection, 7);
   const isContinuation = structureAligned || barTrendStrength >= 5 / 7;
   // BUGFIX (F10, аудит 2026-10-02): раньше здесь стояла isNearSwingLevel без
   // учёта направления — для buy-свипа хватало близости максимума свечи к

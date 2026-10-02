@@ -66,8 +66,13 @@
  *     требуется «первый выход» (закрытие перед баром выхода внутри полосы);
  *     фейд запрещён при HTF-тренде против сделки. Меняет состав occurrences
  *     mean-reversion, поэтому кэш версии 12 отдавал бы прежние результаты.
+ * 14 — liquidity-sweep, Этап 3 (fix-plan-liquidity-meanreversion.md, F12/F13):
+ *     требуется отказ от прокола (закрытие свип-бара в возвратной половине его
+ *     диапазона); окно «5 из 7 баров» считается без свип-бара. Меняет состав
+ *     occurrences liquidity-sweep и liquidity-sweep-reaction (внутренний свип),
+ *     поэтому кэш версии 13 отдавал бы прежние результаты.
  */
-export const OCCURRENCE_ALGORITHM_VERSION = 13;
+export const OCCURRENCE_ALGORITHM_VERSION = 14;
 
 /**
  * Версия СХЕМЫ выходного JSON horizon-audit.

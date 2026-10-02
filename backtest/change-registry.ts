@@ -149,6 +149,18 @@ export const LOGIC_CHANGE_LOG: LogicChangeRecord[] = [
     ],
     frozenAtMs: Date.UTC(2026, 9, 2),
   },
+  {
+    id: 'liquidity-sweep-stage3-rejection-trend-window',
+    date: '2026-10-02',
+    description:
+      'Этап 3 (fix-plan-liquidity-meanreversion.md, F12/F13): liquidity-sweep требует отказ от прокола — закрытие свип-бара не ниже середины его диапазона для buy и не выше середины для sell (раньше закрытие на 0.01 за уровнем считалось свипом); окно «5 из 7 баров» тренд-контекста считается по 7 барам ДО свип-бара, а не включая его. Затрагивает liquidity-sweep и внутренний свип liquidity-sweep-reaction. Пороги и веса не менялись (0.5 — геометрическая середина бара, не подбираемый порог). F08/F11/F21 не входят. OCCURRENCE_ALGORITHM_VERSION 13→14. Таблица горизонтов не перегенерирована. ВАЖНО: frozenAtMs — день фактического деплоя; при деплое позже 2026-10-02 перенести на реальную дату.',
+    filesChanged: [
+      'src/compute/patterns/liquidity-sweep.ts',
+      'src/compute/patterns/liquidity-sweep-stage3.test.ts',
+      'backtest/audit-version.ts',
+    ],
+    frozenAtMs: Date.UTC(2026, 9, 2),
+  },
 ];
 
 /**

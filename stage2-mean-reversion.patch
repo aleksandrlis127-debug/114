@@ -1,0 +1,283 @@
+diff --git a/backtest/audit-version.ts b/backtest/audit-version.ts
+index aa5ecfc..f19b3d8 100644
+--- a/backtest/audit-version.ts
++++ b/backtest/audit-version.ts
+@@ -61,8 +61,13 @@
+  *     ухода за экстремум свипа у бара смещения и промежуточного бара. Меняет
+  *     состав и confidence detectAllPatterns у трёх стратегий, поэтому кэш версии 8
+  *     отдавал бы результаты прежних детекторов.
++ * 13 — mean-reversion, Этап 2 (fix-plan-liquidity-meanreversion.md, F01/F03/F04/F05):
++ *     RSI(7) и полоса Боллинджера берутся на баре выхода, а не на баре возврата;
++ *     требуется «первый выход» (закрытие перед баром выхода внутри полосы);
++ *     фейд запрещён при HTF-тренде против сделки. Меняет состав occurrences
++ *     mean-reversion, поэтому кэш версии 12 отдавал бы прежние результаты.
+  */
+-export const OCCURRENCE_ALGORITHM_VERSION = 12;
++export const OCCURRENCE_ALGORITHM_VERSION = 13;
+ 
+ /**
+  * Версия СХЕМЫ выходного JSON horizon-audit.
+diff --git a/backtest/change-registry.ts b/backtest/change-registry.ts
+index 8a450c8..afa8fe4 100644
+--- a/backtest/change-registry.ts
++++ b/backtest/change-registry.ts
+@@ -137,6 +137,18 @@ export const LOGIC_CHANGE_LOG: LogicChangeRecord[] = [
+     filesChanged: ['src/compute/indicators/liquidity-pools.ts', 'backtest/audit-version.ts'],
+     frozenAtMs: Date.UTC(2026, 9, 2),
+   },
++  {
++    id: 'mean-reversion-stage2-exit-bar',
++    date: '2026-10-02',
++    description:
++      'Этап 2 (fix-plan-liquidity-meanreversion.md, F01/F03/F04/F05): mean-reversion считает RSI(7) и полосу Боллинджера на баре выхода за полосу (раньше RSI брался на баре возврата, полоса — последнего бара); добавлена проверка «первого выхода» (закрытие перед баром выхода внутри полосы, иначе это хождение по полосе); фейд не допускается при HTF-тренде против сделки (buy при trend=down, sell при trend=up). Пороги и веса не менялись. F07 (bollingerMiddle для экспирации) не входит. OCCURRENCE_ALGORITHM_VERSION 12→13. Таблица горизонтов не перегенерирована. ВАЖНО: frozenAtMs — день фактического деплоя; при деплое позже 2026-10-02 перенести на реальную дату.',
++    filesChanged: [
++      'src/compute/patterns/mean-reversion.ts',
++      'src/compute/patterns/index.ts',
++      'backtest/audit-version.ts',
++    ],
++    frozenAtMs: Date.UTC(2026, 9, 2),
++  },
+ ];
+ 
+ /**
+diff --git a/src/compute/patterns/index.ts b/src/compute/patterns/index.ts
+index dea7ed4..9b30705 100644
+--- a/src/compute/patterns/index.ts
++++ b/src/compute/patterns/index.ts
+@@ -1,5 +1,6 @@
+ import type { Candle, PatternResult, FeatureName, IndicatorSnapshot, MarketStructure } from '@/types/domain';
+ import { rsi as calcRsi } from '@/compute/indicators/rsi';
++import { bollinger as calcBollinger } from '@/compute/indicators/bollinger';
+ import { detectHammer, detectShootingStar, detectDoji, detectInvertedHammer, detectHangingMan, detectMarubozuBullish, detectMarubozuBearish, detectSpinningTop } from './single';
+ import {
+   detectBullishEngulfing,
+@@ -362,9 +363,24 @@ export function detectAllPatterns(
+   // reaction ниже — вместо отдельного локального вычисления здесь только
+   // для двух последних детекторов.
+   if (has('mean-reversion') && snapshot) {
+-    const rsiShortArr = calcRsi(candles.map((c) => c.close), 7);
++    const mrCloses = candles.map((c) => c.close);
++    const rsiShortArr = calcRsi(mrCloses, 7);
+     const rsiShort = rsiShortArr[rsiShortArr.length - 1];
+-    const p = detectMeanReversion(candles, snapshot, rsiShort, ctx.session, htfStructure, sessionAgnostic);
++    // Stage 2 (F01/F03/F05): RSI(7) и полосы на баре выхода (n-2) и на баре
++    // перед ним (n-3). Полосы 20/2 — как в continuation.ts.
++    const mrBb = calcBollinger(mrCloses, 20, 2);
++    const mrN = mrCloses.length;
++    const mrExit = mrN >= 3
++      ? {
++          rsi: rsiShortArr[mrN - 2] ?? null,
++          upper: mrBb.upper[mrN - 2] ?? null,
++          lower: mrBb.lower[mrN - 2] ?? null,
++          prev2Close: mrCloses[mrN - 3],
++          prev2Upper: mrBb.upper[mrN - 3] ?? null,
++          prev2Lower: mrBb.lower[mrN - 3] ?? null,
++        }
++      : undefined;
++    const p = detectMeanReversion(candles, snapshot, rsiShort, ctx.session, htfStructure, sessionAgnostic, mrExit);
+     if (p) raw.push(p);
+   }
+   if (has('strong-order-block-reaction')) { const p = detectStrongOrderBlockReaction(candles, ctx.structure, ctx.session, ctx.smartMoney, atrPeriod, htfStructure); if (p) raw.push(p); }
+diff --git a/src/compute/patterns/mean-reversion-stage2.test.ts b/src/compute/patterns/mean-reversion-stage2.test.ts
+new file mode 100644
+index 0000000..b5000d2
+--- /dev/null
++++ b/src/compute/patterns/mean-reversion-stage2.test.ts
+@@ -0,0 +1,104 @@
++import { describe, it, expect } from 'vitest';
++import type { Candle, IndicatorSnapshot, MarketStructure } from '@/types/domain';
++import { detectMeanReversion, type MeanReversionExitContext } from './mean-reversion';
++
++// Этап 2 (fix-plan-liquidity-meanreversion.md): F01, F03, F04, F05.
++
++function candle(time: number, open: number, close: number, high: number, low: number, volume = 100): Candle {
++  return { time, open, high, low, close, volume };
++}
++
++function flatWarmup(count = 30): Candle[] {
++  return Array.from({ length: count }, (_, i) => {
++    const bullish = i % 2 === 0;
++    return candle(i, bullish ? 99.9 : 100.1, bullish ? 100.1 : 99.9, 100.6, 99.4, 100);
++  });
++}
++
++function mirror(candles: Candle[]): Candle[] {
++  return candles.map((c) => ({
++    time: c.time, open: 200 - c.open, close: 200 - c.close,
++    high: 200 - c.low, low: 200 - c.high, volume: c.volume,
++  }));
++}
++
++const snapshot: IndicatorSnapshot = {
++  rsi: 50, emaFast: 100, emaSlow: 100,
++  macd: 0, macdSignal: 0, macdHistogram: 0,
++  atr: 1.2, bollingerUpper: 102, bollingerMiddle: 100, bollingerLower: 98,
++  vwap: null, vwapIsProxyVolume: false, volumeProfilePoc: null, volumeProfilePocIsProxyVolume: false,
++  meanReversionRsi: null, impulseVelocity: null, adx: 10,
++};
++
++const exitBar = () => candle(30, 100, 96, 100.2, 95, 120); // закрытие 96 < нижней полосы 98
++const returnBar = () => candle(31, 96, 99, 99.5, 95.8, 120);
++const buyCandles = () => [...flatWarmup(30), exitBar(), returnBar()];
++
++const exitCtx = (over: Partial<MeanReversionExitContext> = {}): MeanReversionExitContext => ({
++  rsi: 20, upper: 102, lower: 98,
++  prev2Close: 100, prev2Upper: 102, prev2Lower: 98,
++  ...over,
++});
++
++const htf = (trend: MarketStructure['trend']): MarketStructure => ({
++  trend, bos: false, choch: false, swingHigh: 105, swingLow: 95, provisional: false,
++});
++
++describe('F01 — RSI(7) берётся на баре выхода', () => {
++  it('RSI выхода экстремален, RSI последнего бара нет → сигнал', () => {
++    const r = detectMeanReversion(buyCandles(), snapshot, 50, 'london', undefined, false, exitCtx({ rsi: 20 }));
++    expect(r?.direction).toBe('buy');
++  });
++  it('RSI последнего бара экстремален, RSI выхода нет → нет сигнала', () => {
++    expect(detectMeanReversion(buyCandles(), snapshot, 20, 'london', undefined, false, exitCtx({ rsi: 50 }))).toBeNull();
++  });
++  it('sell (зеркало)', () => {
++    const c = mirror(buyCandles());
++    expect(detectMeanReversion(c, snapshot, 50, 'london', undefined, false, exitCtx({ rsi: 80 }))?.direction).toBe('sell');
++    expect(detectMeanReversion(c, snapshot, 80, 'london', undefined, false, exitCtx({ rsi: 50 }))).toBeNull();
++  });
++});
++
++describe('F05 — полоса бара выхода', () => {
++  // Полоса последнего бара ушла вниз (94): prev.close=96 уже не «за полосой»
++  // последнего бара, но был за полосой бара выхода (98).
++  const lastBandSnap = { ...snapshot, bollingerLower: 94 };
++  it('с контекстом выхода — сигнал', () => {
++    expect(detectMeanReversion(buyCandles(), lastBandSnap, 20, 'london', undefined, false, exitCtx({ lower: 98 }))?.direction).toBe('buy');
++  });
++  it('без контекста (прежнее поведение) — нет сигнала', () => {
++    expect(detectMeanReversion(buyCandles(), lastBandSnap, 20, 'london')).toBeNull();
++  });
++});
++
++describe('F03 — только первый выход за полосу', () => {
++  it('закрытие перед баром выхода уже за полосой → нет сигнала', () => {
++    expect(detectMeanReversion(buyCandles(), snapshot, 20, 'london', undefined, false, exitCtx({ prev2Close: 97, prev2Lower: 98 }))).toBeNull();
++  });
++  it('закрытие перед баром выхода внутри полосы → сигнал', () => {
++    expect(detectMeanReversion(buyCandles(), snapshot, 20, 'london', undefined, false, exitCtx({ prev2Close: 99, prev2Lower: 98 }))?.direction).toBe('buy');
++  });
++  it('sell (зеркало)', () => {
++    const c = mirror(buyCandles());
++    expect(detectMeanReversion(c, snapshot, 80, 'london', undefined, false, exitCtx({ rsi: 80, prev2Close: 103, prev2Upper: 102 }))).toBeNull();
++    expect(detectMeanReversion(c, snapshot, 80, 'london', undefined, false, exitCtx({ rsi: 80, prev2Close: 101, prev2Upper: 102 }))?.direction).toBe('sell');
++  });
++});
++
++describe('F04 — HTF-тренд против сделки', () => {
++  it('buy: HTF down → нет сигнала; range и up → сигнал', () => {
++    const run = (t: MarketStructure['trend']) =>
++      detectMeanReversion(buyCandles(), snapshot, 20, 'london', htf(t), false, exitCtx());
++    expect(run('down')).toBeNull();
++    expect(run('range')?.direction).toBe('buy');
++    expect(run('up')?.direction).toBe('buy');
++  });
++  it('sell: HTF up → нет сигнала; range и down → сигнал', () => {
++    const c = mirror(buyCandles());
++    const run = (t: MarketStructure['trend']) =>
++      detectMeanReversion(c, snapshot, 80, 'london', htf(t), false, exitCtx({ rsi: 80 }));
++    expect(run('up')).toBeNull();
++    expect(run('range')?.direction).toBe('sell');
++    expect(run('down')?.direction).toBe('sell');
++  });
++});
+diff --git a/src/compute/patterns/mean-reversion.ts b/src/compute/patterns/mean-reversion.ts
+index 188d196..b09f6ff 100644
+--- a/src/compute/patterns/mean-reversion.ts
++++ b/src/compute/patterns/mean-reversion.ts
+@@ -16,6 +16,19 @@ function clamp01(v: number): number {
+ }
+ 
+ const ENTRY_THRESHOLD = 0.65;
++
++// Stage 2 (F01/F03/F05): значения на баре ВЫХОДА за полосу (prev) и на баре
++// перед ним. Считаются вызывающим по полным рядам индикаторов. Если не
++// передан (тесты, старые вызовы) — прежнее поведение: RSI и полосы последнего
++// бара, проверка «первого выхода» пропускается.
++export interface MeanReversionExitContext {
++  rsi: number | null;
++  upper: number | null;
++  lower: number | null;
++  prev2Close: number | null;
++  prev2Upper: number | null;
++  prev2Lower: number | null;
++}
+ const ADX_HARD_BLOCK = 25;
+ 
+ // Mean reversion: close beyond BB + RSI(7) in extreme zone (>75/<25) + first
+@@ -32,6 +45,7 @@ export function detectMeanReversion(
+   htfStructure?: MarketStructure,
+   // D1: см. PatternContext.sessionAgnostic в pattern-context.ts.
+   sessionAgnostic?: boolean,
++  exit?: MeanReversionExitContext,
+ ): PatternResult | null {
+   if (candles.length < 5) return null;
+   gate('mean-reversion:00-evaluated');
+@@ -112,21 +126,28 @@ export function detectMeanReversion(
+     };
+   }
+ 
++  // F01: RSI(7) на баре выхода (prev), а не на баре возврата. F05: полоса,
++  // с которой сравнивается закрытие prev, — полоса бара выхода; возврат
++  // проверяется по полосе последнего бара.
++  const rsiExit = exit ? exit.rsi : rsiShort;
++  const lowerExit = exit?.lower ?? snapshot.bollingerLower;
++  const upperExit = exit?.upper ?? snapshot.bollingerUpper;
++
+   // Bullish mean reversion: close was below lower BB, now reverses back inside
+-  if (prev.close < snapshot.bollingerLower && last.close > snapshot.bollingerLower) {
+-    // D3 п.7 — только измерение: сколько кандидатов проходят геометрию
+-    // "вышел за полосу и вернулся" САМУ ПО СЕБЕ, независимо от RSI(7).
+-    // Раньше это было неотделимо от gate('mean-reversion:05-band-exit-rsi')
+-    // ниже, который срабатывает только при ОБОИХ условиях сразу.
++  if (prev.close < lowerExit && last.close > snapshot.bollingerLower) {
+     diagCount('mean-reversion:05a-band-exit-only-buy');
+-    // BUGFIX (F06, аудит 2026-10-02): раньше направление свечи возврата не
+-    // проверялось (lastBody — модуль): медвежья свеча, закрывшаяся выше
+-    // нижней полосы после глубокого выхода, давала buy. Свеча возврата для
+-    // buy обязана быть бычьей. Пороги и геометрия баров не менялись.
+-    if (last.close > last.open && rsiShort !== null && rsiShort < 25) {
++    // F03: первый выход — закрытие перед баром выхода было внутри полосы
++    // (иначе «хождение по полосе» — сигнал продолжения, не истощения).
++    const firstExit = exit?.prev2Close == null || exit.prev2Lower == null || exit.prev2Close >= exit.prev2Lower;
++    // F04: фейд только если HTF-тренд не против сделки (buy — не при HTF down).
++    const htfOk = htfStructure?.trend !== 'down';
++    if (!firstExit) diagCount('mean-reversion:05c-band-walk-blocked-buy');
++    if (!htfOk) diagCount('mean-reversion:05d-htf-against-buy');
++    // F06: свеча возврата для buy обязана быть бычьей.
++    if (firstExit && htfOk && last.close > last.open && rsiExit !== null && rsiExit < 25) {
+       gate('mean-reversion:05-band-exit-rsi');
+       diagCount('mean-reversion:05b-band-exit-and-rsi-buy');
+-      const depthBeyondBB = snapshot.bollingerLower - prev.close;
++      const depthBeyondBB = lowerExit - prev.close;
+       const exitStrength = clamp01((depthBeyondBB / atrValue) / 2.0);
+       const returnStrength = clamp01((lastBody / atrValue) / 1.5);
+       const base = exitStrength * 0.5 + returnStrength * 0.5;
+@@ -136,13 +157,17 @@ export function detectMeanReversion(
+   }
+ 
+   // Bearish mean reversion: close was above upper BB, now reverses back inside
+-  if (prev.close > snapshot.bollingerUpper && last.close < snapshot.bollingerUpper) {
++  if (prev.close > upperExit && last.close < snapshot.bollingerUpper) {
+     diagCount('mean-reversion:05a-band-exit-only-sell');
++    const firstExit = exit?.prev2Close == null || exit.prev2Upper == null || exit.prev2Close <= exit.prev2Upper;
++    const htfOk = htfStructure?.trend !== 'up';
++    if (!firstExit) diagCount('mean-reversion:05c-band-walk-blocked-sell');
++    if (!htfOk) diagCount('mean-reversion:05d-htf-against-sell');
+     // F06: зеркально — свеча возврата для sell обязана быть медвежьей.
+-    if (last.close < last.open && rsiShort !== null && rsiShort > 75) {
++    if (firstExit && htfOk && last.close < last.open && rsiExit !== null && rsiExit > 75) {
+       gate('mean-reversion:05-band-exit-rsi');
+       diagCount('mean-reversion:05b-band-exit-and-rsi-sell');
+-      const depthBeyondBB = prev.close - snapshot.bollingerUpper;
++      const depthBeyondBB = prev.close - upperExit;
+       const exitStrength = clamp01((depthBeyondBB / atrValue) / 2.0);
+       const returnStrength = clamp01((lastBody / atrValue) / 1.5);
+       const base = exitStrength * 0.5 + returnStrength * 0.5;

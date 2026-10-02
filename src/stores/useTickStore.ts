@@ -930,6 +930,7 @@ async function maybeEvaluateSignal(
     // fallback — см. tick-store/outcomes.ts) и учитывается ли сигнал в
     // винрейте (см. useAnalyticsStore.recomputeStats).
     const tradeOpened = Boolean(useDemoAccountStore.getState().openTrades[finalSignal.id]);
+    console.warn(`[signal] closed-candle ${finalSignal.symbolId} ${finalSignal.timeframe} id=${finalSignal.id} score=${finalSignal.score} tradeOpened=${tradeOpened} canAttemptOpenHere=${canAttemptOpenHere} knownOpenPrice=${knownOpenPrice !== undefined}`);
     finalSignal = { ...finalSignal, tradeOpened };
   }
 

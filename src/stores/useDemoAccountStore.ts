@@ -273,9 +273,14 @@ export const useDemoAccountStore = create<DemoAccountState>()(
       openTrade: (signal, knownOpenPrice) => {
         const state = get();
         const key = instrumentKey(signal.symbolId, signal.timeframe);
-        if (state.martingale[key]?.halted === true) return;
+        // Диагностика (только console.warn, поведение не меняется): причина,
+        // по которой демо-сделка по сигналу НЕ открылась.
+        const skip = (reason: string): void => {
+          console.warn(`[demo] openTrade skipped: ${reason}`, { key, signalId: signal.id, balance: state.balance, autoTrade: state.autoTradeEnabled });
+        };
+        if (state.martingale[key]?.halted === true) { skip('halted'); return; }
 
-        if (!state.autoTradeEnabled) return;
+        if (!state.autoTradeEnabled) { skip('autoTradeEnabled=false'); return; }
         if (state.openTrades[signal.id]) return;
 
         // Аудит, п.2: без этой проверки по инструменту может быть открыто
@@ -289,12 +294,13 @@ export const useDemoAccountStore = create<DemoAccountState>()(
         const hasOpenTradeForInstrument = Object.values(state.openTrades).some(
           (t) => t.symbolId === signal.symbolId && t.timeframe === signal.timeframe,
         );
-        if (hasOpenTradeForInstrument) return;
+        if (hasOpenTradeForInstrument) { skip('already open trade for instrument'); return; }
 
         const currentStage: Stage = state.martingale[key]?.stage ?? 0;
         const desiredStake = getStageStake(currentStage, state.stage0Amount, state.stageAmounts);
 
         if (state.balance < desiredStake) {
+          skip(`balance < stake (${desiredStake})`);
           set({
             martingale: {
               ...state.martingale,

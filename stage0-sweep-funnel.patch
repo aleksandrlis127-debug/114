@@ -1,0 +1,257 @@
+diff --git a/backtest/gate-trace.test.ts b/backtest/gate-trace.test.ts
+index 657dba1..4abf729 100644
+--- a/backtest/gate-trace.test.ts
++++ b/backtest/gate-trace.test.ts
+@@ -3,6 +3,10 @@ import { beginGateTrace, endGateTrace, gate, isGateTraceActive } from '@/compute
+ import { auditFeatureSet, buildOccurrences, formatGateFunnel, HORIZON_GRIDS } from './horizon-audit';
+ import { generateRandomWalk } from './synthetic/random-walk';
+ import { DEFAULT_INDICATOR_CONFIG } from '@/types/domain';
++import { computeStructure } from '@/compute/indicators/trend-structure';
++import { detectLiquiditySweep } from '@/compute/patterns/liquidity-sweep';
++import { detectLiquiditySweepReaction } from '@/compute/patterns/liquidity-sweep-reaction';
++import type { SmartMoneyResult } from '@/compute/indicators/smart-money';
+ 
+ describe('gate-trace', () => {
+   it('вне трассировки gate() ничего не делает и не накапливает', () => {
+@@ -83,3 +87,51 @@ describe('инструментация детекторов не меняет р
+     }
+   });
+ });
++
++describe('воронка liquidity-sweep / liquidity-sweep-reaction', () => {
++  const EMPTY_SM: SmartMoneyResult = {
++    orderBlocks: [], fvgs: [], inversionFvgs: [], breakerBlocks: [], rejectionBlocks: [], bosEvents: [],
++  };
++
++  it('трассировка не меняет результат; внутренние вызовы свипа считаются отдельной группой', () => {
++    const candles = generateRandomWalk({ bars: 1500, seed: 7, noiseFraction: 0.1 });
++    const run = () => {
++      const out: unknown[] = [];
++      for (let i = 60; i < candles.length; i++) {
++        const slice = candles.slice(0, i + 1);
++        const st = computeStructure(slice);
++        out.push(detectLiquiditySweep(slice, st, 'london', EMPTY_SM));
++        out.push(detectLiquiditySweepReaction(slice, st, 'london', EMPTY_SM));
++      }
++      return out;
++    };
++    const plain = run();
++    beginGateTrace();
++    const traced = run();
++    const counts = endGateTrace();
++    expect(traced).toEqual(plain);
++
++    const n = candles.length - 60;
++    expect(counts.get('liquidity-sweep:00-evaluated')).toBe(n);
++    expect(counts.get('liquidity-sweep-reaction:00-evaluated')).toBe(n);
++    // внутри реакции свип вызывается 1–2 раза на бар и считается отдельно
++    expect(counts.get('liquidity-sweep-inner:00-evaluated')).toBeGreaterThanOrEqual(n);
++    expect(counts.get('liquidity-sweep-inner:00-evaluated')).toBeLessThanOrEqual(2 * n);
++    // standalone-группа не загрязнена внутренними вызовами
++    expect(counts.get('liquidity-sweep:00-evaluated')).toBe(n);
++
++    // воронки монотонны по этапам внутри каждой группы
++    const byDet = new Map<string, [string, number][]>();
++    for (const [k, v] of counts) {
++      const [det, stage] = k.split(':');
++      if (!byDet.has(det)) byDet.set(det, []);
++      byDet.get(det)!.push([stage, v]);
++    }
++    for (const [det, stages] of byDet) {
++      stages.sort(([a], [b]) => (a < b ? -1 : 1));
++      for (let i = 1; i < stages.length; i++) {
++        expect(stages[i][1], `${det}: ${stages[i][0]}`).toBeLessThanOrEqual(stages[i - 1][1]);
++      }
++    }
++  });
++});
+diff --git a/src/compute/patterns/gate-trace.ts b/src/compute/patterns/gate-trace.ts
+index 4f50e6d..463a691 100644
+--- a/src/compute/patterns/gate-trace.ts
++++ b/src/compute/patterns/gate-trace.ts
+@@ -19,7 +19,9 @@
+  * Сейчас инструментированы: hammer, inverted-hammer, hanging-man,
+  * shooting-star (single.ts), mean-reversion, tweezer-bottom/top (double.ts),
+  * abandoned-baby-bottom/top (triple.ts), falling-three-methods
+- * (continuation.ts) и macd-deceleration-continuation. Остальные детекторы в
++ * (continuation.ts), macd-deceleration-continuation, liquidity-sweep и
++ * liquidity-sweep-reaction (внутренние вызовы свипа из реакции — отдельная группа
++ * liquidity-sweep-inner, на бар приходится до двух таких вызовов). Остальные детекторы в
+  * воронке НЕ участвуют — добавляйте `gate()` по тому же образцу.
+  */
+ let sink: Map<string, number> | null = null;
+@@ -42,3 +44,23 @@ export function isGateTraceActive(): boolean {
+ export function gate(name: string): void {
+   if (sink !== null) sink.set(name, (sink.get(name) ?? 0) + 1);
+ }
++
++// Подмена имени детектора в gate-именах на время вызова. Нужна, когда один
++// детектор вызывает другой внутри себя (liquidity-sweep-reaction → liquidity-sweep):
++// без неё внутренние вызовы свипа смешались бы со standalone-свипом в одной группе.
++let detectorOverride: string | null = null;
++
++export function withGateDetector<T>(detector: string, fn: () => T): T {
++  const prev = detectorOverride;
++  detectorOverride = detector;
++  try {
++    return fn();
++  } finally {
++    detectorOverride = prev;
++  }
++}
++
++/** gate() с именем детектора, которое можно подменить через withGateDetector. */
++export function gateStage(detector: string, stage: string): void {
++  if (sink !== null) gate(`${detectorOverride ?? detector}:${stage}`);
++}
+diff --git a/src/compute/patterns/liquidity-sweep-reaction.ts b/src/compute/patterns/liquidity-sweep-reaction.ts
+index 2a04461..49c10ed 100644
+--- a/src/compute/patterns/liquidity-sweep-reaction.ts
++++ b/src/compute/patterns/liquidity-sweep-reaction.ts
+@@ -4,6 +4,7 @@ import { lastNonNull, volumeRatio, hasReliableVolume } from '@/compute/indicator
+ import { atr } from '@/compute/indicators/atr';
+ import type { SessionRegime } from '@/compute/session-regime';
+ import type { SmartMoneyResult } from '@/compute/indicators/smart-money';
++import { gateStage, withGateDetector } from './gate-trace';
+ import { nearestOppositeZonePrice, bosAlignsWithDirection, chochAlignsWithDirection } from './pattern-context';
+ 
+ function strengthForConfidence(confidence: number): SignalStrength {
+@@ -50,7 +51,9 @@ function findSweep(
+ ): SweepFind | null {
+   // Try sweep 1 bar back (bar N-1 relative to the current last bar N).
+   const oneBarBack = candles.slice(0, -1);
+-  const sweep1 = detectLiquiditySweep(oneBarBack, structure, session, smartMoney, 20, atrPeriod, sessionAgnostic);
++  const sweep1 = withGateDetector('liquidity-sweep-inner', () =>
++    detectLiquiditySweep(oneBarBack, structure, session, smartMoney, 20, atrPeriod, sessionAgnostic),
++  );
+   if (sweep1) {
+     return { sweepIdx: candles.length - 2, sweepResult: sweep1 };
+   }
+@@ -60,7 +63,9 @@ function findSweep(
+   // not have re-invalidated (closed back through) the swept level.
+   if (candles.length < 3) return null;
+   const twoBarsBack = candles.slice(0, -2);
+-  const sweep2 = detectLiquiditySweep(twoBarsBack, structure, session, smartMoney, 20, atrPeriod, sessionAgnostic);
++  const sweep2 = withGateDetector('liquidity-sweep-inner', () =>
++    detectLiquiditySweep(twoBarsBack, structure, session, smartMoney, 20, atrPeriod, sessionAgnostic),
++  );
+   if (!sweep2) return null;
+ 
+   const sweepIdx = candles.length - 3;
+@@ -97,10 +102,12 @@ export function detectLiquiditySweepReaction(
+   // F17: см. PatternContext.sessionAgnostic в pattern-context.ts.
+   sessionAgnostic?: boolean,
+ ): PatternResult | null {
++  gateStage('liquidity-sweep-reaction', '00-evaluated');
+   if (candles.length < 22) return null;
+ 
+   const found = findSweep(candles, structure, session, smartMoney, atrPeriod, sessionAgnostic);
+   if (!found) return null;
++  gateStage('liquidity-sweep-reaction', '01-sweep-found');
+   const { sweepIdx, sweepResult } = found;
+   const sweepBar = candles[sweepIdx];
+   const direction = sweepResult.direction;
+@@ -119,17 +126,21 @@ export function detectLiquiditySweepReaction(
+   // of the reversal, with a body dominating the bar's own range.
+   const brokeExtreme = direction === 'buy' ? last.close > sweepBar.high : last.close < sweepBar.low;
+   if (!brokeExtreme) return null;
++  gateStage('liquidity-sweep-reaction', '02-broke-extreme');
+   // F19: бар смещения обязан идти в сторону разворота (buy — бычья свеча,
+   // sell — медвежья): раньше хватало закрытия за экстремум свип-бара, и
+   // медвежья свеча с гэпом вверх засчитывалась как бычье смещение.
+   const displacementInDirection = direction === 'buy' ? last.close > last.open : last.close < last.open;
+   if (!displacementInDirection) return null;
++  gateStage('liquidity-sweep-reaction', '03-displacement-direction');
+   // F19: и не должен уходить за экстремум свип-бара (buy — ниже его low, sell —
+   // выше его high): это повторный, более глубокий прокол, а не реакция.
+   const reTookExtreme = direction === 'buy' ? last.low < sweepBar.low : last.high > sweepBar.high;
+   if (reTookExtreme) return null;
++  gateStage('liquidity-sweep-reaction', '04-no-retake');
+   if (body < atrValue) return null;
+   if (body < range * 0.6) return null;
++  gateStage('liquidity-sweep-reaction', '05-body');
+ 
+   // Volume tiering (audit finding #1) — same "not a hard gate on Forex"
+   // logic as detectLiquiditySweep(): <1.5x is a hard block only when volume
+@@ -142,6 +153,7 @@ export function detectLiquiditySweepReaction(
+   const volumeReliable = hasReliableVolume(candles, lastIdx, 20);
+   const volRatio = volumeReliable ? volumeRatio(candles, lastIdx, 20) : null;
+   if (volumeReliable && volRatio! < 1.5) return null;
++  gateStage('liquidity-sweep-reaction', '06-volume');
+   const volumeMultiplier = volumeReliable ? (volRatio! < 2.0 ? 0.7 : 1.0) : 1.0;
+ 
+   // MSS/CHoCH confirmation in the direction of the reversal. BOS здесь НЕ
+@@ -172,6 +184,7 @@ export function detectLiquiditySweepReaction(
+ 
+   confidence = clamp01(confidence);
+   if (confidence < ENTRY_THRESHOLD) return null;
++  gateStage('liquidity-sweep-reaction', '07-confidence');
+ 
+   // Structural SL/TP inputs (audit finding #6) — computed here (not in
+   // signal-builder.ts) because smartMoney is already in scope, sparing the
+diff --git a/src/compute/patterns/liquidity-sweep.ts b/src/compute/patterns/liquidity-sweep.ts
+index 862aae3..4a7e6dc 100644
+--- a/src/compute/patterns/liquidity-sweep.ts
++++ b/src/compute/patterns/liquidity-sweep.ts
+@@ -4,6 +4,7 @@ import { atr } from '@/compute/indicators/atr';
+ import type { SessionRegime } from '@/compute/session-regime';
+ import type { SmartMoneyResult } from '@/compute/indicators/smart-money';
+ import { checkTrendStrength } from './trend-utils';
++import { gateStage } from './gate-trace';
+ import {
+   sessionBoost,
+   htfAlignment,
+@@ -42,11 +43,13 @@ export function detectLiquiditySweep(
+   // D1: см. PatternContext.sessionAgnostic в pattern-context.ts.
+   sessionAgnostic?: boolean,
+ ): PatternResult | null {
++  gateStage('liquidity-sweep', '00-evaluated');
+   if (candles.length < lookback + 1) return null;
+ 
+   const atrArr = atr(candles, atrPeriod);
+   const atrValue = lastNonNull(atrArr);
+   if (atrValue === null || atrValue <= 0) return null;
++  gateStage('liquidity-sweep', '01-indicators');
+ 
+   const slice = candles.slice(-lookback - 1, -1);
+   const recentHigh = Math.max(...slice.map((c) => c.high));
+@@ -68,6 +71,7 @@ export function detectLiquiditySweep(
+   }
+ 
+   if (direction === null) return null;
++  gateStage('liquidity-sweep', '02-sweep-geometry');
+ 
+   // Глубина прокола в единицах ATR — вычисляется здесь (до тренд-контекста),
+   // потому что сценарий "разворот у ключевого уровня" ниже сам зависит от
+@@ -106,6 +110,7 @@ export function detectLiquiditySweep(
+   const isReversalAtKeyLevel =
+     isNearSwingLevelForDirection(structure, last, atrValue, direction) && depthInAtr >= 0.5;
+   if (!isContinuation && !isReversalAtKeyLevel) return null;
++  gateStage('liquidity-sweep', '03-context');
+   const setupType: 'continuation' | 'reversal-at-key-level' = isContinuation
+     ? 'continuation'
+     : 'reversal-at-key-level';
+@@ -115,6 +120,7 @@ export function detectLiquiditySweep(
+   //    либо настоящий пробой структуры в противоположную сторону).
+   if (depthInAtr > MAX_DEPTH_ATR) return null;
+   if (depthInAtr < MIN_DEPTH_ATR) return null;
++  gateStage('liquidity-sweep', '04-depth');
+ 
+   // 5. Объёмный фильтр — НЕ жёсткий блок, а условное усиление (аудит,
+   //    находка №1). На споте Форекс через REST-провайдеров (TwelveData/
+@@ -129,6 +135,7 @@ export function detectLiquiditySweep(
+   const volumeReliable = hasReliableVolume(candles, lastIdx, 20);
+   const volRatio = volumeReliable ? volumeRatio(candles, lastIdx, 20) : null;
+   if (volumeReliable && volRatio! < MIN_VOLUME_RATIO) return null;
++  gateStage('liquidity-sweep', '05-volume');
+ 
+   // 6. Конфлюэнс с OB/FVG старшего ТФ либо со swing-уровнем структуры —
+   //    не hard-блок, а понижающий/повышающий мультипликатор confidence.
+@@ -161,6 +168,7 @@ export function detectLiquiditySweep(
+ 
+   confidence = clamp01(confidence);
+   if (confidence < ENTRY_THRESHOLD) return null;
++  gateStage('liquidity-sweep', '06-confidence');
+ 
+   return {
+     name: 'liquidity-sweep',
