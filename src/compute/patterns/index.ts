@@ -1,5 +1,6 @@
 import type { Candle, PatternResult, FeatureName, IndicatorSnapshot, MarketStructure } from '@/types/domain';
 import { rsi as calcRsi } from '@/compute/indicators/rsi';
+import { bollinger as calcBollinger } from '@/compute/indicators/bollinger';
 import { detectHammer, detectShootingStar, detectDoji, detectInvertedHammer, detectHangingMan, detectMarubozuBullish, detectMarubozuBearish, detectSpinningTop } from './single';
 import {
   detectBullishEngulfing,
@@ -362,9 +363,24 @@ export function detectAllPatterns(
   // reaction ниже — вместо отдельного локального вычисления здесь только
   // для двух последних детекторов.
   if (has('mean-reversion') && snapshot) {
-    const rsiShortArr = calcRsi(candles.map((c) => c.close), 7);
+    const mrCloses = candles.map((c) => c.close);
+    const rsiShortArr = calcRsi(mrCloses, 7);
     const rsiShort = rsiShortArr[rsiShortArr.length - 1];
-    const p = detectMeanReversion(candles, snapshot, rsiShort, ctx.session, htfStructure, sessionAgnostic);
+    // Stage 2 (F01/F03/F05): RSI(7) и полосы на баре выхода (n-2) и на баре
+    // перед ним (n-3). Полосы 20/2 — как в continuation.ts.
+    const mrBb = calcBollinger(mrCloses, 20, 2);
+    const mrN = mrCloses.length;
+    const mrExit = mrN >= 3
+      ? {
+          rsi: rsiShortArr[mrN - 2] ?? null,
+          upper: mrBb.upper[mrN - 2] ?? null,
+          lower: mrBb.lower[mrN - 2] ?? null,
+          prev2Close: mrCloses[mrN - 3],
+          prev2Upper: mrBb.upper[mrN - 3] ?? null,
+          prev2Lower: mrBb.lower[mrN - 3] ?? null,
+        }
+      : undefined;
+    const p = detectMeanReversion(candles, snapshot, rsiShort, ctx.session, htfStructure, sessionAgnostic, mrExit);
     if (p) raw.push(p);
   }
   if (has('strong-order-block-reaction')) { const p = detectStrongOrderBlockReaction(candles, ctx.structure, ctx.session, ctx.smartMoney, atrPeriod, htfStructure); if (p) raw.push(p); }

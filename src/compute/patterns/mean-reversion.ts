@@ -16,6 +16,19 @@ function clamp01(v: number): number {
 }
 
 const ENTRY_THRESHOLD = 0.65;
+
+// Stage 2 (F01/F03/F05): значения на баре ВЫХОДА за полосу (prev) и на баре
+// перед ним. Считаются вызывающим по полным рядам индикаторов. Если не
+// передан (тесты, старые вызовы) — прежнее поведение: RSI и полосы последнего
+// бара, проверка «первого выхода» пропускается.
+export interface MeanReversionExitContext {
+  rsi: number | null;
+  upper: number | null;
+  lower: number | null;
+  prev2Close: number | null;
+  prev2Upper: number | null;
+  prev2Lower: number | null;
+}
 const ADX_HARD_BLOCK = 25;
 
 // Mean reversion: close beyond BB + RSI(7) in extreme zone (>75/<25) + first
@@ -32,6 +45,7 @@ export function detectMeanReversion(
   htfStructure?: MarketStructure,
   // D1: см. PatternContext.sessionAgnostic в pattern-context.ts.
   sessionAgnostic?: boolean,
+  exit?: MeanReversionExitContext,
 ): PatternResult | null {
   if (candles.length < 5) return null;
   gate('mean-reversion:00-evaluated');
@@ -112,21 +126,28 @@ export function detectMeanReversion(
     };
   }
 
+  // F01: RSI(7) на баре выхода (prev), а не на баре возврата. F05: полоса,
+  // с которой сравнивается закрытие prev, — полоса бара выхода; возврат
+  // проверяется по полосе последнего бара.
+  const rsiExit = exit ? exit.rsi : rsiShort;
+  const lowerExit = exit?.lower ?? snapshot.bollingerLower;
+  const upperExit = exit?.upper ?? snapshot.bollingerUpper;
+
   // Bullish mean reversion: close was below lower BB, now reverses back inside
-  if (prev.close < snapshot.bollingerLower && last.close > snapshot.bollingerLower) {
-    // D3 п.7 — только измерение: сколько кандидатов проходят геометрию
-    // "вышел за полосу и вернулся" САМУ ПО СЕБЕ, независимо от RSI(7).
-    // Раньше это было неотделимо от gate('mean-reversion:05-band-exit-rsi')
-    // ниже, который срабатывает только при ОБОИХ условиях сразу.
+  if (prev.close < lowerExit && last.close > snapshot.bollingerLower) {
     diagCount('mean-reversion:05a-band-exit-only-buy');
-    // BUGFIX (F06, аудит 2026-10-02): раньше направление свечи возврата не
-    // проверялось (lastBody — модуль): медвежья свеча, закрывшаяся выше
-    // нижней полосы после глубокого выхода, давала buy. Свеча возврата для
-    // buy обязана быть бычьей. Пороги и геометрия баров не менялись.
-    if (last.close > last.open && rsiShort !== null && rsiShort < 25) {
+    // F03: первый выход — закрытие перед баром выхода было внутри полосы
+    // (иначе «хождение по полосе» — сигнал продолжения, не истощения).
+    const firstExit = exit?.prev2Close == null || exit.prev2Lower == null || exit.prev2Close >= exit.prev2Lower;
+    // F04: фейд только если HTF-тренд не против сделки (buy — не при HTF down).
+    const htfOk = htfStructure?.trend !== 'down';
+    if (!firstExit) diagCount('mean-reversion:05c-band-walk-blocked-buy');
+    if (!htfOk) diagCount('mean-reversion:05d-htf-against-buy');
+    // F06: свеча возврата для buy обязана быть бычьей.
+    if (firstExit && htfOk && last.close > last.open && rsiExit !== null && rsiExit < 25) {
       gate('mean-reversion:05-band-exit-rsi');
       diagCount('mean-reversion:05b-band-exit-and-rsi-buy');
-      const depthBeyondBB = snapshot.bollingerLower - prev.close;
+      const depthBeyondBB = lowerExit - prev.close;
       const exitStrength = clamp01((depthBeyondBB / atrValue) / 2.0);
       const returnStrength = clamp01((lastBody / atrValue) / 1.5);
       const base = exitStrength * 0.5 + returnStrength * 0.5;
@@ -136,13 +157,17 @@ export function detectMeanReversion(
   }
 
   // Bearish mean reversion: close was above upper BB, now reverses back inside
-  if (prev.close > snapshot.bollingerUpper && last.close < snapshot.bollingerUpper) {
+  if (prev.close > upperExit && last.close < snapshot.bollingerUpper) {
     diagCount('mean-reversion:05a-band-exit-only-sell');
+    const firstExit = exit?.prev2Close == null || exit.prev2Upper == null || exit.prev2Close <= exit.prev2Upper;
+    const htfOk = htfStructure?.trend !== 'up';
+    if (!firstExit) diagCount('mean-reversion:05c-band-walk-blocked-sell');
+    if (!htfOk) diagCount('mean-reversion:05d-htf-against-sell');
     // F06: зеркально — свеча возврата для sell обязана быть медвежьей.
-    if (last.close < last.open && rsiShort !== null && rsiShort > 75) {
+    if (firstExit && htfOk && last.close < last.open && rsiExit !== null && rsiExit > 75) {
       gate('mean-reversion:05-band-exit-rsi');
       diagCount('mean-reversion:05b-band-exit-and-rsi-sell');
-      const depthBeyondBB = prev.close - snapshot.bollingerUpper;
+      const depthBeyondBB = prev.close - upperExit;
       const exitStrength = clamp01((depthBeyondBB / atrValue) / 2.0);
       const returnStrength = clamp01((lastBody / atrValue) / 1.5);
       const base = exitStrength * 0.5 + returnStrength * 0.5;

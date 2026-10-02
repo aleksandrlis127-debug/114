@@ -61,8 +61,13 @@
  *     ухода за экстремум свипа у бара смещения и промежуточного бара. Меняет
  *     состав и confidence detectAllPatterns у трёх стратегий, поэтому кэш версии 8
  *     отдавал бы результаты прежних детекторов.
+ * 13 — mean-reversion, Этап 2 (fix-plan-liquidity-meanreversion.md, F01/F03/F04/F05):
+ *     RSI(7) и полоса Боллинджера берутся на баре выхода, а не на баре возврата;
+ *     требуется «первый выход» (закрытие перед баром выхода внутри полосы);
+ *     фейд запрещён при HTF-тренде против сделки. Меняет состав occurrences
+ *     mean-reversion, поэтому кэш версии 12 отдавал бы прежние результаты.
  */
-export const OCCURRENCE_ALGORITHM_VERSION = 12;
+export const OCCURRENCE_ALGORITHM_VERSION = 13;
 
 /**
  * Версия СХЕМЫ выходного JSON horizon-audit.

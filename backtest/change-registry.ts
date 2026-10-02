@@ -137,6 +137,18 @@ export const LOGIC_CHANGE_LOG: LogicChangeRecord[] = [
     filesChanged: ['src/compute/indicators/liquidity-pools.ts', 'backtest/audit-version.ts'],
     frozenAtMs: Date.UTC(2026, 9, 2),
   },
+  {
+    id: 'mean-reversion-stage2-exit-bar',
+    date: '2026-10-02',
+    description:
+      'Этап 2 (fix-plan-liquidity-meanreversion.md, F01/F03/F04/F05): mean-reversion считает RSI(7) и полосу Боллинджера на баре выхода за полосу (раньше RSI брался на баре возврата, полоса — последнего бара); добавлена проверка «первого выхода» (закрытие перед баром выхода внутри полосы, иначе это хождение по полосе); фейд не допускается при HTF-тренде против сделки (buy при trend=down, sell при trend=up). Пороги и веса не менялись. F07 (bollingerMiddle для экспирации) не входит. OCCURRENCE_ALGORITHM_VERSION 12→13. Таблица горизонтов не перегенерирована. ВАЖНО: frozenAtMs — день фактического деплоя; при деплое позже 2026-10-02 перенести на реальную дату.',
+    filesChanged: [
+      'src/compute/patterns/mean-reversion.ts',
+      'src/compute/patterns/index.ts',
+      'backtest/audit-version.ts',
+    ],
+    frozenAtMs: Date.UTC(2026, 9, 2),
+  },
 ];
 
 /**
