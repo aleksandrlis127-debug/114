@@ -71,8 +71,14 @@
  *     диапазона); окно «5 из 7 баров» считается без свип-бара. Меняет состав
  *     occurrences liquidity-sweep и liquidity-sweep-reaction (внутренний свип),
  *     поэтому кэш версии 13 отдавал бы прежние результаты.
+ * 15 — liquidity-sweep-reaction, Этап 4 (решение владельца D7=2): у бара
+ *     смещения убрана жёсткая граница «тело ≥ 1 ATR»; доминирование тела в
+ *     диапазоне бара (≥0.6) и ENTRY_THRESHOLD не менялись. Формально сигнал
+ *     возможен в узком окне (confidence свипа ≥0.9, тело 0.8–1.0 ATR,
+ *     подтверждённая структура, объём ≥2.0×); на Binance ETH/BTC (288 тыс.
+ *     баров каждый) число сигналов не изменилось (9 и 11).
  */
-export const OCCURRENCE_ALGORITHM_VERSION = 14;
+export const OCCURRENCE_ALGORITHM_VERSION = 15;
 
 /**
  * Версия СХЕМЫ выходного JSON horizon-audit.

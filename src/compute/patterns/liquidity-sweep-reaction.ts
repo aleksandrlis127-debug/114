@@ -138,7 +138,11 @@ export function detectLiquiditySweepReaction(
   const reTookExtreme = direction === 'buy' ? last.low < sweepBar.low : last.high > sweepBar.high;
   if (reTookExtreme) return null;
   gateStage('liquidity-sweep-reaction', '04-no-retake');
-  if (body < atrValue) return null;
+  // Этап 4 (решение владельца D7=2): убрана жёсткая нижняя граница тела бара
+  // смещения «≥1 ATR» (на Binance она была главным отсевом после доминирования
+  // тела: 68→14 на ETH). Число-замена не вводится: слабое тело по-прежнему
+  // снижает confidence через displacementConfidence = body/ATR/2 и режется
+  // ENTRY_THRESHOLD (0.70). Доминирование тела в диапазоне бара (≥0.6) не менялось.
   if (body < range * 0.6) return null;
   gateStage('liquidity-sweep-reaction', '05-body');
 

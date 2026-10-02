@@ -161,6 +161,18 @@ export const LOGIC_CHANGE_LOG: LogicChangeRecord[] = [
     ],
     frozenAtMs: Date.UTC(2026, 9, 2),
   },
+  {
+    id: 'liquidity-sweep-reaction-stage4-body-gate',
+    date: '2026-10-02',
+    description:
+      'Этап 4 (fix-plan-liquidity-meanreversion.md, решение владельца D7=2): у бара смещения liquidity-sweep-reaction убран жёсткий гейт «тело ≥ 1 ATR». Доминирование тела в диапазоне бара (≥0.6), объёмный гейт и ENTRY_THRESHOLD не менялись; слабое тело по-прежнему снижает confidence через body/ATR/2. Новых порогов нет. Замер на Binance (ETH, BTC, 288 тыс. баров, без OB/FVG, сессия london): сигналов 9 и 11, как до правки — главным отсевом остаётся объёмный гейт (≈84%). Эффект на точность не измерялся. OCCURRENCE_ALGORITHM_VERSION 14→15. Таблица горизонтов не перегенерирована. ВАЖНО: frozenAtMs — день фактического деплоя; при деплое позже 2026-10-02 перенести на реальную дату.',
+    filesChanged: [
+      'src/compute/patterns/liquidity-sweep-reaction.ts',
+      'src/compute/patterns/liquidity-sweep-reaction-stage4.test.ts',
+      'backtest/audit-version.ts',
+    ],
+    frozenAtMs: Date.UTC(2026, 9, 2),
+  },
 ];
 
 /**
