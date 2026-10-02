@@ -27,8 +27,14 @@ function clamp01(v: number): number {
 
 const ENTRY_THRESHOLD = 0.65;
 const MIN_VOLUME_RATIO = 1.5;
-const MIN_DEPTH_ATR = 0.3;
 const MAX_DEPTH_ATR = 2.0;
+// F08 (Этап 3): бывшие нижние границы глубины (0.3 ATR для обоих сценариев и
+// 0.5 ATR для reversal) были недостижимы — убраны без смены поведения.
+// Нижняя граница глубины задаётся самой формулой confidence = depth/1.5 и
+// ENTRY_THRESHOLD: даже при максимальных множителях (overlap 1.15 × OB-
+// конфлюэнс 1.1) сигнал возможен только от ≈0.77 ATR (continuation) и ≈0.86 ATR
+// (reversal, ×0.9). Инвариант закреплён тестом в liquidity-sweep-stage3.test.ts:
+// при смене формулы или порога тест покажет, что нижней границы глубины больше нет.
 
 // Liquidity sweep (ICT): price spikes beyond a recent extreme, on volume,
 // then closes back inside the range — see bolt-prompt-8-strategies-replacement.md
@@ -87,8 +93,8 @@ export function detectLiquiditySweep(
 
   // Глубина прокола в единицах ATR — вычисляется здесь (до тренд-контекста),
   // потому что сценарий "разворот у ключевого уровня" ниже сам зависит от
-  // depthInAtr (спецификация требует ≥0.5×ATR именно для разворотных
-  // сетапов, не только общий диапазон 0.3–2.0 для обоих сценариев).
+  // depthInAtr (верхняя граница глубины — MAX_DEPTH_ATR; нижняя задаётся
+  // формулой confidence, см. комментарий у констант).
   const depthInAtr = depth / atrValue;
 
   // 1. Тренд-контекст перед sweep — ДВА равноправных валидных сценария
@@ -103,7 +109,7 @@ export function detectLiquiditySweep(
   //
   //    б) Reversal-at-key-level — Wyckoff Spring/Upthrust: sweep ПРОТИВ
   //       текущего тренда, но ровно на структурно значимом swing-уровне
-  //       (isNearSwingLevel) и с достаточной глубиной прокола (≥0.5×ATR).
+  //       (isNearSwingLevel) и с достаточной глубиной прокола (нижняя граница — через confidence, см. F08).
   //       Старая версия кода допускала только (а), из-за чего ни один
   //       классический Spring/Upthrust не мог пройти фильтр — а это как
   //       раз тот случай, который пользователь и трейдеры называют
@@ -119,22 +125,20 @@ export function detectLiquiditySweep(
   // учёта направления — для buy-свипа хватало близости максимума свечи к
   // swingHigh (сопротивление), хотя Spring обязан снимать ликвидность под
   // swingLow, а Upthrust — над swingHigh. Теперь: buy — low свечи у swingLow,
-  // sell — high свечи у swingHigh. Порог proximity (1.5×ATR) и глубина (≥0.5×ATR)
-  // не менялись. `nearSwing` ниже (штраф ×0.8 за отсутствие конфлюэнса) —
+  // sell — high свечи у swingHigh. Порог proximity (1.5×ATR)
+  // не менялся. `nearSwing` ниже (штраф ×0.8 за отсутствие конфлюэнса) —
   // отдельное место, в этой правке не тронуто.
-  const isReversalAtKeyLevel =
-    isNearSwingLevelForDirection(structure, last, atrValue, direction) && depthInAtr >= 0.5;
+  const isReversalAtKeyLevel = isNearSwingLevelForDirection(structure, last, atrValue, direction);
   if (!isContinuation && !isReversalAtKeyLevel) return null;
   gateStage('liquidity-sweep', '03-context');
   const setupType: 'continuation' | 'reversal-at-key-level' = isContinuation
     ? 'continuation'
     : 'reversal-at-key-level';
 
-  // 4. Диапазон глубины прокола (общий для обоих сценариев) — вне
-  //    0.3–2.0 ATR это уже не убедительный sweep (либо слишком мелкий шум,
-  //    либо настоящий пробой структуры в противоположную сторону).
+  // 4. Верхняя граница глубины прокола (общая для обоих сценариев) — глубже
+  //    2.0 ATR это уже не sweep, а настоящий пробой структуры в
+  //    противоположную сторону. Нижняя граница — через confidence (см. F08).
   if (depthInAtr > MAX_DEPTH_ATR) return null;
-  if (depthInAtr < MIN_DEPTH_ATR) return null;
   gateStage('liquidity-sweep', '04-depth');
 
   // 5. Объёмный фильтр — НЕ жёсткий блок, а условное усиление (аудит,
@@ -175,8 +179,8 @@ export function detectLiquiditySweep(
   // looks like by construction. Applying it here would undo the trend-
   // context gate above (a real reversal would get the same ~0.5x penalty as
   // an ambiguous, unconfirmed counter-trend guess). Reversal setups already
-  // passed their own, stricter bar (swing-level proximity + depth >=0.5x
-  // ATR) — a mild discount (0.9) reflects the residual extra risk of fading
+  // passed their own, stricter bar (swing-level proximity; depth is bounded
+  // from below by the confidence formula, see F08) — a mild discount (0.9) reflects the residual extra risk of fading
   // a trend, without re-imposing the continuation-only logic that would
   // otherwise make this setup unreachable in practice.
   confidence *= setupType === 'reversal-at-key-level' ? 0.9 : htfAlignment(structure, direction);

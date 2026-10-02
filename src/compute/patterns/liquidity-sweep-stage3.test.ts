@@ -3,6 +3,8 @@ import type { Candle, MarketStructure } from '@/types/domain';
 import type { SmartMoneyResult } from '@/compute/indicators/smart-money';
 import { detectLiquiditySweep } from './liquidity-sweep';
 import { beginGateTrace, endGateTrace } from './gate-trace';
+import { atr } from '@/compute/indicators/atr';
+import { lastNonNull } from '@/compute/indicators/helpers';
 
 // Этап 3 fix-plan-liquidity-meanreversion.md: F12 (отказ от прокола) и
 // F13 (тренд-окно без свип-бара). Проверяются счётчиками воронки, чтобы тесты
@@ -92,5 +94,35 @@ describe('F13: окно «5 из 7» не включает свип-бар', () 
     const c = [...warmup(30, (i) => bull.has(i)), sweepBar];
     const t = trace(c);
     expect(t.get('liquidity-sweep:03-context')).toBe(1);
+  });
+});
+
+// F08: бывшие нижние границы глубины (0.3 / 0.5 ATR) убраны как недостижимые.
+// Тест закрепляет инвариант: ни при каком из максимальных множителей
+// (overlap 1.15, trend=up без штрафов) прокол мельче ≈0.77 ATR сигнала не даёт.
+// Если формула confidence или ENTRY_THRESHOLD изменятся, тест покажет,
+// что нижней границы глубины больше нет, и её придётся вернуть явно.
+describe('F08: нижняя граница глубины задаётся confidence, а не мёртвыми константами', () => {
+  const UP: MarketStructure = { ...RANGE, trend: 'up', bos: true, bosDirection: 'up' };
+  const base = warmup(30, (i) => i % 2 === 0);
+
+  function depthInAtr(c: Candle[]): number {
+    const a = lastNonNull(atr(c, 14))!;
+    return (WARMUP_LOW - c[c.length - 1].low) / a;
+  }
+
+  it('прокол мельче 0.77 ATR не даёт сигнала даже в overlap при максимальном контексте', () => {
+    for (const low of [99.3, 99.2, 99.0, 98.8, 98.6]) {
+      const c = [...base, candle(30, 99.5, 99.7, 100.5, low, 260)];
+      const d = depthInAtr(c);
+      expect(d).toBeLessThan(0.77);
+      expect(detectLiquiditySweep(c, UP, 'overlap', EMPTY_SMART_MONEY)).toBeNull();
+    }
+  });
+
+  it('контроль (тест не пустой): глубокий прокол в тех же условиях даёт сигнал', () => {
+    const c = [...base, candle(30, 99.5, 99.6, 100.5, 97.6, 260)];
+    expect(depthInAtr(c)).toBeGreaterThan(0.77);
+    expect(detectLiquiditySweep(c, UP, 'overlap', EMPTY_SMART_MONEY)).not.toBeNull();
   });
 });
