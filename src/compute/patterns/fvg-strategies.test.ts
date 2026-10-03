@@ -74,8 +74,9 @@ describe('detectFvgReturn (Strategy A — Возврат к FVG)', () => {
     const last = candle(candles[candles.length - 1].time + 60, 106, 106.5, 107, 104.2, 100);
     candles.push(last);
 
+    // Зона замыкается за одну свечу до last: ранних свечей-триггеров нет (правило «одна зона — один сигнал»).
     const fvg = mockFvg({
-      top: 105, bottom: 104, time: candles[candles.length - 6].time, type: 'bullish', hasOBConfluence: true,
+      top: 105, bottom: 104, time: candles[candles.length - 4].time, type: 'bullish', hasOBConfluence: true,
     });
     const smartMoney: SmartMoneyResult = { orderBlocks: [], fvgs: [fvg], inversionFvgs: [], breakerBlocks: [], rejectionBlocks: [], bosEvents: [] };
     const snapshot: IndicatorSnapshot = { ...NEUTRAL_SNAPSHOT, emaSlow: 100 };
@@ -184,23 +185,7 @@ describe('detectFvgRejection (Strategy D — Отбой от границы FVG)
   });
 });
 
-describe('detectFvgNested (Strategy C — Вложенный FVG)', () => {
-  it('returns null with insufficient history for HTF resampling', () => {
-    const candles = risingWarmup(30, 1700000000, 100);
-    const smartMoney: SmartMoneyResult = { orderBlocks: [], fvgs: [], inversionFvgs: [], breakerBlocks: [], rejectionBlocks: [], bosEvents: [] };
-    const result = detectFvgNested(candles, NEUTRAL_SNAPSHOT, 'london', smartMoney);
-    expect(result).toBeNull();
-  });
-
-  it('returns null when there is no M1 FVG nested inside an HTF zone', () => {
-    // 60 plain rising candles produce no clean 3-bar gap at either timeframe.
-    const candles = risingWarmup(60, 1700000000, 100, 0.02);
-    const smartMoney: SmartMoneyResult = { orderBlocks: [], fvgs: [], inversionFvgs: [], breakerBlocks: [], rejectionBlocks: [], bosEvents: [] };
-    const result = detectFvgNested(candles, NEUTRAL_SNAPSHOT, 'london', smartMoney);
-    expect(result).toBeNull();
-  });
-
-  it('detects a buy signal when an M1 FVG sits inside a same-direction HTF FVG and price is in the overlap', () => {
+function nestedFixture(): Candle[] {
     let t = 1700000000;
     const candles: Candle[] = [];
     const push = (open: number, close: number, high: number, low: number, volume = 100) => {
@@ -252,9 +237,30 @@ describe('detectFvgNested (Strategy C — Вложенный FVG)', () => {
     push(102.95, 102.9, 103.0, 102.7, 100);
     push(102.9, 102.85, 102.95, 102.65, 100);
     push(102.85, 102.9, 103.1, 102.6, 300); // last candle, in the overlap zone
+  return candles;
+}
+
+describe('detectFvgNested (Strategy C — Вложенный FVG)', () => {
+  it('returns null with insufficient history for HTF resampling', () => {
+    const candles = risingWarmup(30, 1700000000, 100);
+    const smartMoney: SmartMoneyResult = { orderBlocks: [], fvgs: [], inversionFvgs: [], breakerBlocks: [], rejectionBlocks: [], bosEvents: [] };
+    const result = detectFvgNested(candles, NEUTRAL_SNAPSHOT, 'london', smartMoney);
+    expect(result).toBeNull();
+  });
+
+  it('returns null when there is no M1 FVG nested inside an HTF zone', () => {
+    // 60 plain rising candles produce no clean 3-bar gap at either timeframe.
+    const candles = risingWarmup(60, 1700000000, 100, 0.02);
+    const smartMoney: SmartMoneyResult = { orderBlocks: [], fvgs: [], inversionFvgs: [], breakerBlocks: [], rejectionBlocks: [], bosEvents: [] };
+    const result = detectFvgNested(candles, NEUTRAL_SNAPSHOT, 'london', smartMoney);
+    expect(result).toBeNull();
+  });
+
+  it('detects a buy signal when an M1 FVG sits inside a same-direction HTF FVG and price is in the overlap', () => {
+    const candles = nestedFixture();
 
     const m1Fvg = mockFvg({
-      top: 103.2, bottom: 102.5, time: candles[candles.length - 5].time, type: 'bullish',
+      top: 103.2, bottom: 102.5, time: candles[candles.length - 3].time, type: 'bullish',
     });
     const smartMoney: SmartMoneyResult = { orderBlocks: [], fvgs: [m1Fvg], inversionFvgs: [], breakerBlocks: [], rejectionBlocks: [], bosEvents: [] };
     const snapshot: IndicatorSnapshot = { ...NEUTRAL_SNAPSHOT, emaSlow: 100 };
@@ -263,6 +269,49 @@ describe('detectFvgNested (Strategy C — Вложенный FVG)', () => {
     expect(result).not.toBeNull();
     expect(result?.name).toBe('fvg-nested');
     expect(result?.direction).toBe('buy');
+  });
+});
+
+describe('Аудит FVG 2026-10-04 — повторы, перебор зон, тело breaker, выбор направления', () => {
+  const EMPTY = { orderBlocks: [], inversionFvgs: [], breakerBlocks: [], rejectionBlocks: [], bosEvents: [] };
+
+  it('fvg-return: одна зона — один сигнал (второй бар в зоне не стреляет повторно)', () => {
+    const candles = risingWarmup(34, 1700000000, 100);
+    candles.push(candle(candles[candles.length - 1].time + 60, 106, 106.5, 107, 104.2, 100)); // первый ретест
+    const fvg = mockFvg({ top: 105, bottom: 104, time: candles[candles.length - 4].time, type: 'bullish', hasOBConfluence: true });
+    const snapshot: IndicatorSnapshot = { ...NEUTRAL_SNAPSHOT, emaSlow: 100 };
+    expect(detectFvgReturn(candles, snapshot, UP_STRUCTURE, 'london', { ...EMPTY, fvgs: [fvg] })).not.toBeNull();
+    candles.push(candle(candles[candles.length - 1].time + 60, 106.2, 106.6, 107, 104.3, 100)); // повторный ретест той же зоны
+    expect(detectFvgReturn(candles, snapshot, UP_STRUCTURE, 'london', { ...EMPTY, fvgs: [fvg] })).toBeNull();
+  });
+
+  it('fvg-return: если самая свежая зона не подходит, проверяется более старая', () => {
+    const candles = risingWarmup(34, 1700000000, 100);
+    candles.push(candle(candles[candles.length - 1].time + 60, 106, 106.5, 107, 104.2, 100));
+    const old = mockFvg({ top: 105, bottom: 104, time: candles[candles.length - 4].time, type: 'bullish', hasOBConfluence: true });
+    const fresh = mockFvg({ top: 120, bottom: 119, time: candles[candles.length - 3].time, type: 'bullish' }); // далеко от цены
+    const snapshot: IndicatorSnapshot = { ...NEUTRAL_SNAPSHOT, emaSlow: 100 };
+    expect(detectFvgReturn(candles, snapshot, UP_STRUCTURE, 'london', { ...EMPTY, fvgs: [old, fresh] })?.direction).toBe('buy');
+  });
+
+  it('fvg-breaker-block: тело свечи с open внутри зоны не считается «снаружи»', () => {
+    const candles = risingWarmup(34, 1700000000, 100);
+    // open 104.6 внутри зоны [104,105], close 106.3 снаружи, длинный нижний фитиль (wick ≈0.46)
+    candles.push(candle(candles[candles.length - 1].time + 60, 104.6, 106.3, 106.5, 103.0, 100));
+    candles.push(candle(candles[candles.length - 1].time + 60, 106.4, 107, 107.2, 106.3, 300));
+    const fvg = mockFvg({ top: 105, bottom: 104, time: candles[candles.length - 5].time, type: 'bullish', hasBOSConfluence: true });
+    const snapshot: IndicatorSnapshot = { ...NEUTRAL_SNAPSHOT, emaSlow: 100 };
+    expect(detectFvgBreakerBlock(candles, snapshot, 'london', { ...EMPTY, fvgs: [fvg] })).toBeNull();
+  });
+
+  it('fvg-nested: пересечение зоны без закрытия за CE перекрытия не даёт сигнала', () => {
+    const candles = nestedFixture();
+    const lastC = candles[candles.length - 1];
+    // перекрытие [102.5, 103.2], CE = 102.85; свеча входит в зону, но закрывается ниже CE
+    candles[candles.length - 1] = { ...lastC, open: 102.9, close: 102.6, high: 103.1, low: 102.55 };
+    const m1 = mockFvg({ top: 103.2, bottom: 102.5, time: candles[candles.length - 3].time, type: 'bullish' });
+    const snapshot: IndicatorSnapshot = { ...NEUTRAL_SNAPSHOT, emaSlow: 100 };
+    expect(detectFvgNested(candles, snapshot, 'london', { ...EMPTY, fvgs: [m1] })).toBeNull();
   });
 });
 

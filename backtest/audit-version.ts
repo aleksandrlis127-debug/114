@@ -87,8 +87,16 @@
  *     M1-хвостом после последней полной M5-группы, отбрасывается. Меняет состав
  *     и confidence occurrences трёх стратегий, поэтому кэш версии 15 отдавал бы
  *     результаты прежних детекторов.
+ * 17 — аудит стратегий FVG 2026-10-04 (без смены весов и порогов): fvg-return,
+ *     fvg-breaker-block, fvg-nested, fvg-rejection — одна зона даёт не более
+ *     одного сигнала, перебор всех свежих зон вместо последней, при двойном
+ *     совпадении побеждает большая confidence; fvg-nested требует закрытия за CE
+ *     перекрытия; fvg-breaker-block — тело (open и close) целиком снаружи зоны;
+ *     hasBOSConfluence учитывает BOS на средней/правой свече FVG. Меняет состав
+ *     occurrences четырёх стратегий, поэтому кэш версии 16 отдавал бы
+ *     результаты прежних детекторов.
  */
-export const OCCURRENCE_ALGORITHM_VERSION = 16;
+export const OCCURRENCE_ALGORITHM_VERSION = 17;
 
 /**
  * Версия СХЕМЫ выходного JSON horizon-audit.

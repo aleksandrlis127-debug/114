@@ -9,6 +9,7 @@ import { intervalSeconds } from './pattern-context';
 import {
   resampleCandles,
   pickFreshUnbrokenFvgs,
+  zoneAlreadyTriggered,
   vwapSideOk,
   rsiConfirmOk,
   ema50AlignedOk,
@@ -78,6 +79,13 @@ export function detectFvgNested(
   const htfZones = detectHtfFvgZones(candles);
   if (htfZones.length === 0) return null;
 
+  // Аудит FVG 2026-10-04: (1) нужна реакция, а не просто пересечение —
+  // закрытие на стороне сделки от CE зоны перекрытия (как у fvg-return);
+  // (2) одна зона M1 — один сигнал; (3) при двойном совпадении побеждает
+  // сигнал с большей confidence, а не «buy первым».
+  let best: PatternResult | null = null;
+  const lastIdx = candles.length - 1;
+
   for (const wantType of ['bullish', 'bearish'] as const) {
     const direction: 'buy' | 'sell' = wantType === 'bullish' ? 'buy' : 'sell';
 
@@ -86,14 +94,21 @@ export function detectFvgNested(
     const m1Candidates = pickFreshUnbrokenFvgs(smartMoney.fvgs, wantType, last.time, intervalSec, MAX_AGE_BARS);
     if (m1Candidates.length === 0) continue;
 
-    for (const htf of htfCandidates) {
-      for (const m1 of m1Candidates) {
+    let found: PatternResult | null = null;
+    search: for (let k = m1Candidates.length - 1; k >= 0; k--) {
+      const m1 = m1Candidates[k];
+      for (const htf of htfCandidates) {
         const overlapTop = Math.min(htf.top, m1.top);
         const overlapBottom = Math.max(htf.bottom, m1.bottom);
         if (overlapTop <= overlapBottom) continue; // zones don't actually overlap
+        const overlapCe = (overlapTop + overlapBottom) / 2;
 
-        const priceInConfluence = last.low <= overlapTop && last.high >= overlapBottom;
-        if (!priceInConfluence) continue;
+        const triggers = (c: Candle): boolean => {
+          if (!(c.low <= overlapTop && c.high >= overlapBottom)) return false;
+          return direction === 'buy' ? c.close >= overlapCe : c.close <= overlapCe;
+        };
+        if (!triggers(last)) continue;
+        if (zoneAlreadyTriggered(candles, m1.time, lastIdx, triggers)) continue;
 
         const atrValue = snapshot?.atr ?? null;
         const rsiFast = lastNonNull(calcRsi(candles.map((c) => c.close), 7));
@@ -114,7 +129,7 @@ export function detectFvgNested(
         if (score < FVG_SCORE_MIN_ENTRY) continue;
 
         const confidence = Math.max(0, Math.min(1, score / FVG_SCORE_MAX));
-        return {
+        found = {
           name: 'fvg-nested',
           direction,
           confidence,
@@ -122,9 +137,11 @@ export function detectFvgNested(
           time: last.time,
           volumeConfirmed: volRatio > 1.5,
         };
+        break search;
       }
     }
+    if (found && (!best || found.confidence > best.confidence)) best = found;
   }
 
-  return null;
+  return best;
 }

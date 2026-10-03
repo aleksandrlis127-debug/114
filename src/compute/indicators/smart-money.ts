@@ -479,7 +479,11 @@ export function calcSmartMoney(candles: Candle[], options?: SmartMoneyOptions): 
     fvg.hasBOSConfluence = leftIndex >= 0 && bosEvents.some((bos) => {
       if (bos.type !== fvg.type) return false;
       const bosIndex = timeIndex.get(bos.time) ?? -1;
-      return bosIndex >= 0 && bosIndex <= leftIndex && leftIndex - bosIndex <= BOS_CONFLUENCE_LOOKBACK_BARS;
+      // Аудит FVG 2026-10-04: BOS фиксируется на свече закрытия за пивот — это
+      // обычно сама импульсная (средняя) свеча FVG, т.е. leftIndex+1 (или
+      // правая, leftIndex+2). Раньше `bosIndex <= leftIndex` отбрасывал именно
+      // этот канонический случай; окно расширено до правой свечи FVG.
+      return bosIndex >= 0 && bosIndex <= leftIndex + 2 && leftIndex - bosIndex <= BOS_CONFLUENCE_LOOKBACK_BARS;
     });
   }
   inversionFvgs.forEach((ifvg, k) => {

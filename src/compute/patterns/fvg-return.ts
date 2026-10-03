@@ -7,6 +7,7 @@ import { lastNonNull } from '@/compute/indicators/helpers';
 import { intervalSeconds } from './pattern-context';
 import {
   pickFreshUnbrokenFvgs,
+  zoneAlreadyTriggered,
   vwapSideOk,
   rsiConfirmOk,
   ema50AlignedOk,
@@ -49,54 +50,57 @@ export function detectFvgReturn(
   const candidates = pickFreshUnbrokenFvgs(smartMoney.fvgs, wantType, last.time, intervalSec, MAX_AGE_BARS);
   if (candidates.length === 0) return null;
 
-  const fvg = candidates[candidates.length - 1];
-
-  // Retest: the current candle's range overlaps the zone.
-  const touchedZone = last.low <= fvg.top && last.high >= fvg.bottom;
-  if (!touchedZone) return null;
-
-  // Reaction confirmation + mandatory filter ("цена не закрылась за
-  // пределами FVG против сигнала"): close must sit on the trade side of
-  // the zone's CE midline and must not have closed through the far edge.
-  if (direction === 'buy') {
-    if (last.close < fvg.ce) return null;
-    if (last.close < fvg.bottom) return null;
-  } else {
-    if (last.close > fvg.ce) return null;
-    if (last.close > fvg.top) return null;
-  }
-
+  // Аудит FVG 2026-10-04: раньше брался только самый свежий FVG — если он не
+  // подходил, подходящая более старая зона не проверялась. Перебираем от
+  // ближней к дальней; одна зона даёт не более одного сигнала.
   const atrValue = snapshot?.atr ?? null;
   const rsiFast = lastNonNull(calcRsi(candles.map((c) => c.close), 7));
   const vwapValue = vwapLast(candles, vwapSessionPeriod(candles)).value;
   const ema50Value = snapshot?.emaSlow ?? null;
+  const lastIdx = candles.length - 1;
 
-  // Doc's Wyckoff-style rule (§2, "Правило для приложения"): on the return
-  // move, volume should be lower than the impulse candle that created the
-  // gap — evidence of no opposing aggression. The impulse candle is the
-  // FVG's middle candle, one bar after its recorded left/time candle.
-  const impulseIdx = candles.findIndex((c) => c.time === fvg.time) + 1;
-  const impulseVolume = impulseIdx > 0 && impulseIdx < candles.length ? candles[impulseIdx].volume : null;
-  const volumeConfirmed = impulseVolume != null && impulseVolume > 0 ? last.volume < impulseVolume : false;
+  for (let k = candidates.length - 1; k >= 0; k--) {
+    const fvg = candidates[k];
 
-  const score = scoreFvgSignal({
-    emaAligned: ema50AlignedOk(direction, last.close, ema50Value),
-    vwapAligned: vwapSideOk(direction, last.close, vwapValue),
-    rsiConfirmed: rsiConfirmOk(direction, rsiFast),
-    volumeConfirmed,
-    confluenceBonus: fvg.hasOBConfluence || fvg.hasBOSConfluence,
-    atrNormal: atrNotSpiking(last, atrValue),
-    sessionBoosted: session === 'london' || session === 'newyork' || session === 'overlap',
-  });
-  if (score < FVG_SCORE_MIN_ENTRY) return null;
+    // Геометрический триггер стратегии (ретест + закрытие на стороне сделки
+    // от CE, не за дальним краем) — единый предикат для текущей и ранних свечей.
+    const triggers = (c: Candle): boolean => {
+      if (!(c.low <= fvg.top && c.high >= fvg.bottom)) return false;
+      return direction === 'buy'
+        ? c.close >= fvg.ce && c.close >= fvg.bottom
+        : c.close <= fvg.ce && c.close <= fvg.top;
+    };
+    if (!triggers(last)) continue;
+    if (zoneAlreadyTriggered(candles, fvg.time, lastIdx, triggers)) continue;
 
-  const confidence = Math.max(0, Math.min(1, score / FVG_SCORE_MAX));
-  return {
-    name: 'fvg-return',
-    direction,
-    confidence,
-    strength: strengthForFvgScore(confidence),
-    time: last.time,
-    volumeConfirmed,
-  };
+    // Doc's Wyckoff-style rule (§2, "Правило для приложения"): on the return
+    // move, volume should be lower than the impulse candle that created the
+    // gap. The impulse candle is the FVG's middle candle, one bar after its
+    // recorded left/time candle.
+    const impulseIdx = candles.findIndex((c) => c.time === fvg.time) + 1;
+    const impulseVolume = impulseIdx > 0 && impulseIdx < candles.length ? candles[impulseIdx].volume : null;
+    const volumeConfirmed = impulseVolume != null && impulseVolume > 0 ? last.volume < impulseVolume : false;
+
+    const score = scoreFvgSignal({
+      emaAligned: ema50AlignedOk(direction, last.close, ema50Value),
+      vwapAligned: vwapSideOk(direction, last.close, vwapValue),
+      rsiConfirmed: rsiConfirmOk(direction, rsiFast),
+      volumeConfirmed,
+      confluenceBonus: fvg.hasOBConfluence || fvg.hasBOSConfluence,
+      atrNormal: atrNotSpiking(last, atrValue),
+      sessionBoosted: session === 'london' || session === 'newyork' || session === 'overlap',
+    });
+    if (score < FVG_SCORE_MIN_ENTRY) continue;
+
+    const confidence = Math.max(0, Math.min(1, score / FVG_SCORE_MAX));
+    return {
+      name: 'fvg-return',
+      direction,
+      confidence,
+      strength: strengthForFvgScore(confidence),
+      time: last.time,
+      volumeConfirmed,
+    };
+  }
+  return null;
 }

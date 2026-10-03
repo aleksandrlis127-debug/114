@@ -187,6 +187,22 @@ export const LOGIC_CHANGE_LOG: LogicChangeRecord[] = [
     ],
     frozenAtMs: Date.UTC(2026, 9, 3),
   },
+  {
+    id: 'fvg-audit-20261004',
+    date: '2026-10-04',
+    description:
+      'Аудит стратегий FVG (без смены весов и порогов): fvg-return/fvg-breaker-block/fvg-nested/fvg-rejection — одна зона даёт не более одного сигнала (zoneAlreadyTriggered), перебор всех свежих зон от ближней вместо последней, при двойном совпадении buy/sell побеждает большая confidence; fvg-nested — закрытие за CE зоны перекрытия; fvg-breaker-block — тело (open и close) целиком снаружи зоны; smart-money.ts — hasBOSConfluence учитывает BOS на средней/правой свече FVG (bosIndex <= leftIndex+2). OCCURRENCE_ALGORITHM_VERSION 16→17. Таблица горизонтов не перегенерирована.',
+    filesChanged: [
+      'src/compute/indicators/smart-money.ts',
+      'src/compute/patterns/fvg-strategies-shared.ts',
+      'src/compute/patterns/fvg-return.ts',
+      'src/compute/patterns/fvg-breaker-block.ts',
+      'src/compute/patterns/fvg-nested.ts',
+      'src/compute/patterns/fvg-rejection.ts',
+      'backtest/audit-version.ts',
+    ],
+    frozenAtMs: Date.UTC(2026, 9, 4),
+  },
 ];
 
 /**

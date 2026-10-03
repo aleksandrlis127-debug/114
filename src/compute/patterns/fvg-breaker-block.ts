@@ -7,6 +7,7 @@ import { lastNonNull, volumeRatio } from '@/compute/indicators/helpers';
 import { nextCandleConfirmation, intervalSeconds } from './pattern-context';
 import {
   pickFreshUnbrokenFvgs,
+  zoneAlreadyTriggered,
   vwapSideOk,
   rsiConfirmOk,
   ema50AlignedOk,
@@ -44,64 +45,74 @@ export function detectFvgBreakerBlock(
   const patternCandle = candles[candles.length - 2];
   const intervalSec = intervalSeconds(candles);
 
+  // Аудит FVG 2026-10-04: при двойном совпадении (buy и sell) раньше всегда
+  // побеждал buy (первый в цикле) — теперь выбирается сигнал с большей
+  // confidence. Внутри направления перебираются ВСЕ свежие зоны (ближняя
+  // первой), а не только последняя; одна зона — один сигнал.
+  let best: PatternResult | null = null;
+  const patternIdx = candles.length - 2;
+
   for (const wantType of ['bullish', 'bearish'] as const) {
     const direction: 'buy' | 'sell' = wantType === 'bullish' ? 'buy' : 'sell';
 
     const candidates = pickFreshUnbrokenFvgs(smartMoney.fvgs, wantType, patternCandle.time, intervalSec, MAX_AGE_BARS)
       .filter((f) => f.hasBOSConfluence);
-    if (candidates.length === 0) continue;
-    const fvg = candidates[candidates.length - 1];
 
-    // BUGFIX (аудит 2026-09-12, п.3): раньше "close >= fvg.bottom" (buy) /
-    // "close <= fvg.top" (sell) допускало закрытие ГДЕ УГОДНО внутри зоны —
-    // требования "тело закрылось СНАРУЖИ зоны", описанного в докстринге
-    // этого файла выше ("body stays outside it"), физически не было. Теперь
-    // разделено на два условия по образцу order-block-breaker.ts (та же
-    // "wick-then-confirmation" геометрия, см. комментарий в том файле):
-    // сначала фитиль реально вошёл в зону, затем тело ПОЛНОСТЬЮ закрылось
-    // снаружи неё — на стороне, откуда пришёл первоначальный импульс.
-    const enteredZone = patternCandle.low <= fvg.top && patternCandle.high >= fvg.bottom;
-    if (!enteredZone) continue;
-    const closedBackOutside = direction === 'buy'
-      ? patternCandle.close >= fvg.top
-      : patternCandle.close <= fvg.bottom;
-    if (!closedBackOutside) continue;
+    for (let k = candidates.length - 1; k >= 0; k--) {
+      const fvg = candidates[k];
 
-    const wr = wickRatio(patternCandle, direction === 'buy' ? 'lower' : 'upper');
-    if (wr < MIN_WICK_RATIO) continue;
+      // Геометрия breaker-свечи: фитиль вошёл в зону, ТЕЛО (и open, и close)
+      // целиком снаружи неё на стороне исходного импульса, доминирующий фитиль.
+      // Раньше проверялся только close — open мог лежать внутри зоны.
+      const geometry = (c: Candle): boolean => {
+        if (!(c.low <= fvg.top && c.high >= fvg.bottom)) return false;
+        const bodyOutside = direction === 'buy'
+          ? Math.min(c.open, c.close) >= fvg.top
+          : Math.max(c.open, c.close) <= fvg.bottom;
+        if (!bodyOutside) return false;
+        return wickRatio(c, direction === 'buy' ? 'lower' : 'upper') >= MIN_WICK_RATIO;
+      };
+      if (!geometry(patternCandle)) continue;
+      if (zoneAlreadyTriggered(candles, fvg.time, patternIdx, geometry)) continue;
 
-    const confirmation = nextCandleConfirmation(patternCandle, last, direction);
-    if (!confirmation.confirmed) continue;
+      const wr = wickRatio(patternCandle, direction === 'buy' ? 'lower' : 'upper');
 
-    const atrValue = snapshot?.atr ?? null;
-    const rsiFast = lastNonNull(calcRsi(candles.map((c) => c.close), 7));
-    const vwapValue = vwapLast(candles, vwapSessionPeriod(candles)).value;
-    const ema50Value = snapshot?.emaSlow ?? null;
-    const volRatio = volumeRatio(candles, candles.length - 1, 20);
+      const confirmation = nextCandleConfirmation(patternCandle, last, direction);
+      if (!confirmation.confirmed) continue;
 
-    const score = scoreFvgSignal({
-      emaAligned: ema50AlignedOk(direction, last.close, ema50Value),
-      vwapAligned: vwapSideOk(direction, last.close, vwapValue),
-      rsiConfirmed: rsiConfirmOk(direction, rsiFast),
-      volumeConfirmed: volRatio > 1.5,
-      // This strategy's own defining confluence is a dominant breaker wick.
-      confluenceBonus: wr >= 0.6,
-      atrNormal: atrNotSpiking(last, atrValue),
-      sessionBoosted: session === 'london' || session === 'newyork' || session === 'overlap',
-    });
-    if (score < FVG_SCORE_MIN_ENTRY) continue;
+      const atrValue = snapshot?.atr ?? null;
+      const rsiFast = lastNonNull(calcRsi(candles.map((c) => c.close), 7));
+      const vwapValue = vwapLast(candles, vwapSessionPeriod(candles)).value;
+      const ema50Value = snapshot?.emaSlow ?? null;
+      const volRatio = volumeRatio(candles, candles.length - 1, 20);
 
-    const confidence = Math.max(0, Math.min(1, (score / FVG_SCORE_MAX) * confirmation.multiplier));
-    return {
-      name: 'fvg-breaker-block',
-      direction,
-      confidence,
-      strength: strengthForFvgScore(confidence),
-      time: last.time,
-      volumeConfirmed: volRatio > 1.5,
-      confirmedByNextCandle: true,
-    };
+      const score = scoreFvgSignal({
+        emaAligned: ema50AlignedOk(direction, last.close, ema50Value),
+        vwapAligned: vwapSideOk(direction, last.close, vwapValue),
+        rsiConfirmed: rsiConfirmOk(direction, rsiFast),
+        volumeConfirmed: volRatio > 1.5,
+        // This strategy's own defining confluence is a dominant breaker wick.
+        confluenceBonus: wr >= 0.6,
+        atrNormal: atrNotSpiking(last, atrValue),
+        sessionBoosted: session === 'london' || session === 'newyork' || session === 'overlap',
+      });
+      if (score < FVG_SCORE_MIN_ENTRY) continue;
+
+      const confidence = Math.max(0, Math.min(1, (score / FVG_SCORE_MAX) * confirmation.multiplier));
+      if (!best || confidence > best.confidence) {
+        best = {
+          name: 'fvg-breaker-block',
+          direction,
+          confidence,
+          strength: strengthForFvgScore(confidence),
+          time: last.time,
+          volumeConfirmed: volRatio > 1.5,
+          confirmedByNextCandle: true,
+        };
+      }
+      break;
+    }
   }
 
-  return null;
+  return best;
 }

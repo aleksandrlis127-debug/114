@@ -7,6 +7,7 @@ import { lastNonNull, volumeRatio, hasReliableVolume } from '@/compute/indicator
 import { nextCandleConfirmation, intervalSeconds } from './pattern-context';
 import {
   pickFreshUnbrokenFvgs,
+  zoneAlreadyTriggered,
   vwapSideOk,
   rsiConfirmOk,
   ema50AlignedOk,
@@ -43,70 +44,81 @@ export function detectFvgRejection(
   const patternIdx = candles.length - 2;
   const intervalSec = intervalSeconds(candles);
 
+  // Аудит FVG 2026-10-04: выбор направления по большей confidence (а не
+  // «buy первым»), перебор всех свежих зон, одна зона — один сигнал.
+  let best: PatternResult | null = null;
+
   for (const wantType of ['bullish', 'bearish'] as const) {
     const direction: 'buy' | 'sell' = wantType === 'bullish' ? 'buy' : 'sell';
 
     const candidates = pickFreshUnbrokenFvgs(smartMoney.fvgs, wantType, patternCandle.time, intervalSec, MAX_AGE_BARS);
-    if (candidates.length === 0) continue;
-    const fvg = candidates[candidates.length - 1];
 
-    const boundary = direction === 'buy' ? fvg.top : fvg.bottom;
-    const touchedBoundary = direction === 'buy'
-      ? patternCandle.low <= boundary && patternCandle.low >= fvg.bottom
-      : patternCandle.high >= boundary && patternCandle.high <= fvg.top;
-    if (!touchedBoundary) continue;
+    for (let k = candidates.length - 1; k >= 0; k--) {
+      const fvg = candidates[k];
 
-    const range = patternCandle.high - patternCandle.low || 1e-9;
-    const body = Math.abs(patternCandle.close - patternCandle.open);
-    const wr = wickRatio(patternCandle, direction === 'buy' ? 'lower' : 'upper');
-    if (wr < MIN_WICK_RATIO || body / range > MAX_BODY_TO_RANGE) continue;
+      // Геометрия отбоя (без объёма и подтверждения): касание границы зоны
+      // и форма пин-бара/доджи. Тот же предикат определяет «зона уже
+      // отработана более ранним отбоем».
+      const geometry = (c: Candle): boolean => {
+        const boundary = direction === 'buy' ? fvg.top : fvg.bottom;
+        const touched = direction === 'buy'
+          ? c.low <= boundary && c.low >= fvg.bottom
+          : c.high >= boundary && c.high <= fvg.top;
+        if (!touched) return false;
+        const rng = c.high - c.low || 1e-9;
+        const bd = Math.abs(c.close - c.open);
+        return wickRatio(c, direction === 'buy' ? 'lower' : 'upper') >= MIN_WICK_RATIO && bd / rng <= MAX_BODY_TO_RANGE;
+      };
+      if (!geometry(patternCandle)) continue;
+      if (zoneAlreadyTriggered(candles, fvg.time, patternIdx, geometry)) continue;
 
-    // BUGFIX (сверка 2026-09-21): раньше это был безусловный `volumeRatio()
-    // < MIN_TOUCH_VOLUME_RATIO(1.2)` жёсткий гейт. На Deriv/форекс-фидах
-    // (volume ≡ 0 в окне) averageVolume()=0 → volumeRatio() возвращает
-    // нейтральную заглушку 1 (см. helpers.ts), а 1 < 1.2 всегда истинно —
-    // то есть fvg-rejection не мог сработать НИ РАЗУ на таких данных,
-    // независимо от качества самого отбоя. hasReliableVolume() отличает
-    // «объёма в окне нет вообще» от «объём есть и ниже требуемого» — гейт
-    // применяется только когда есть на что опереться, иначе пропускается
-    // (volumeConfirmed = false ниже, честно, как в impulse-breakout.ts).
-    const volumeReliable = hasReliableVolume(candles, patternIdx, 20);
-    const touchVolRatio = volumeReliable ? volumeRatio(candles, patternIdx, 20) : null;
-    if (volumeReliable && touchVolRatio! < MIN_TOUCH_VOLUME_RATIO) continue;
+      // BUGFIX (сверка 2026-09-21): раньше это был безусловный `volumeRatio()
+      // < MIN_TOUCH_VOLUME_RATIO(1.2)` жёсткий гейт. На Deriv/форекс-фидах
+      // (volume ≡ 0 в окне) volumeRatio() возвращает нейтральную заглушку 1,
+      // а 1 < 1.2 всегда истинно — fvg-rejection не мог сработать НИ РАЗУ.
+      // hasReliableVolume() отличает «объёма в окне нет» от «объём есть и
+      // ниже требуемого»: гейт применяется только когда есть на что
+      // опереться (volumeConfirmed = false иначе, честно).
+      const volumeReliable = hasReliableVolume(candles, patternIdx, 20);
+      const touchVolRatio = volumeReliable ? volumeRatio(candles, patternIdx, 20) : null;
+      if (volumeReliable && touchVolRatio! < MIN_TOUCH_VOLUME_RATIO) continue;
 
-    const confirmation = nextCandleConfirmation(patternCandle, last, direction);
-    if (!confirmation.confirmed) continue;
+      const confirmation = nextCandleConfirmation(patternCandle, last, direction);
+      if (!confirmation.confirmed) continue;
 
-    const atrValue = snapshot?.atr ?? null;
-    const rsiFast = lastNonNull(calcRsi(candles.map((c) => c.close), 7));
-    const vwapValue = vwapLast(candles, vwapSessionPeriod(candles)).value;
-    const ema50Value = snapshot?.emaSlow ?? null;
+      const atrValue = snapshot?.atr ?? null;
+      const rsiFast = lastNonNull(calcRsi(candles.map((c) => c.close), 7));
+      const vwapValue = vwapLast(candles, vwapSessionPeriod(candles)).value;
+      const ema50Value = snapshot?.emaSlow ?? null;
+      const volumeConfirmed = volumeReliable ? touchVolRatio! >= 1.5 : false;
 
-    const score = scoreFvgSignal({
-      emaAligned: ema50AlignedOk(direction, last.close, ema50Value),
-      vwapAligned: vwapSideOk(direction, last.close, vwapValue),
-      rsiConfirmed: rsiConfirmOk(direction, rsiFast),
-      volumeConfirmed: volumeReliable ? touchVolRatio! >= 1.5 : false,
-      confluenceBonus: fvg.hasOBConfluence || fvg.hasBOSConfluence,
-      atrNormal: atrNotSpiking(last, atrValue),
-      sessionBoosted: session === 'london' || session === 'newyork' || session === 'overlap',
-    });
-    if (score < FVG_SCORE_MIN_ENTRY) continue;
+      const score = scoreFvgSignal({
+        emaAligned: ema50AlignedOk(direction, last.close, ema50Value),
+        vwapAligned: vwapSideOk(direction, last.close, vwapValue),
+        rsiConfirmed: rsiConfirmOk(direction, rsiFast),
+        volumeConfirmed,
+        confluenceBonus: fvg.hasOBConfluence || fvg.hasBOSConfluence,
+        atrNormal: atrNotSpiking(last, atrValue),
+        sessionBoosted: session === 'london' || session === 'newyork' || session === 'overlap',
+      });
+      if (score < FVG_SCORE_MIN_ENTRY) continue;
 
-    const confidence = Math.max(0, Math.min(1, (score / FVG_SCORE_MAX) * confirmation.multiplier));
-    return {
-      name: 'fvg-rejection',
-      direction,
-      confidence,
-      strength: strengthForFvgScore(confidence),
-      time: last.time,
-      // Честное значение (было захардкожено `true`) — см. BUGFIX выше:
-      // на волюм-less фидах volumeReliable=false, значит объём не был
-      // подтверждён вовсе, а не "всегда подтверждён".
-      volumeConfirmed: volumeReliable ? touchVolRatio! >= 1.5 : false,
-      confirmedByNextCandle: true,
-    };
+      const confidence = Math.max(0, Math.min(1, (score / FVG_SCORE_MAX) * confirmation.multiplier));
+      if (!best || confidence > best.confidence) {
+        best = {
+          name: 'fvg-rejection',
+          direction,
+          confidence,
+          strength: strengthForFvgScore(confidence),
+          time: last.time,
+          // Честное значение: на волюм-less фидах volumeReliable=false.
+          volumeConfirmed,
+          confirmedByNextCandle: true,
+        };
+      }
+      break;
+    }
   }
 
-  return null;
+  return best;
 }

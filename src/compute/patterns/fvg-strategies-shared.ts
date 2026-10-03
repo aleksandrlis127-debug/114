@@ -111,6 +111,38 @@ export function pickFreshUnbrokenFvgs(
   });
 }
 
+/**
+ * Индекс свечи, замыкающей FVG (правая из трёх), либо -1, если левая свеча
+ * зоны вне переданного окна. `SmartMoneyFVG.time` — время ЛЕВОЙ свечи.
+ */
+export function fvgFormationIndex(candles: Candle[], fvgTime: number): number {
+  const left = candles.findIndex((c) => c.time === fvgTime);
+  return left < 0 ? -1 : left + 2;
+}
+
+/**
+ * «Одна зона — один сигнал» (аудит FVG 2026-10-04, п.1). Детекторы
+ * stateless и раньше стреляли на КАЖДОМ баре, пока свеча пересекает зону
+ * (backtest: fvg-return 76 771 срабатываний ≈ 8 021 независимых). Возвращает
+ * true, если между формированием зоны и свечой `beforeIdx` (не включая её)
+ * уже была свеча, прошедшая геометрический триггер стратегии (`qualifies`),
+ * — то есть зона уже «отработана» более ранним сигналом. Веса, пороги и
+ * score не затрагиваются: отсекаются только повторы.
+ */
+export function zoneAlreadyTriggered(
+  candles: Candle[],
+  fvgTime: number,
+  beforeIdx: number,
+  qualifies: (c: Candle) => boolean,
+): boolean {
+  const formed = fvgFormationIndex(candles, fvgTime);
+  if (formed < 0) return false;
+  for (let i = formed + 1; i < beforeIdx; i++) {
+    if (qualifies(candles[i])) return true;
+  }
+  return false;
+}
+
 export function vwapSideOk(direction: SignalDirection, price: number, vwapValue: number | null): boolean {
   if (vwapValue == null) return false;
   return direction === 'buy' ? price > vwapValue : price < vwapValue;
