@@ -1,9 +1,10 @@
 import type { Candle, PatternResult, SignalStrength, MarketStructure } from '@/types/domain';
 import { atr } from '@/compute/indicators/atr';
 import { lastNonNull } from '@/compute/indicators/helpers';
+import { isHighLiquiditySession } from '@/compute/session-regime';
 import type { SessionRegime } from '@/compute/session-regime';
-import { obFvgConfluenceBonus, intervalSeconds } from './pattern-context';
-import type { SmartMoneyResult } from '@/compute/indicators/smart-money';
+import { bosAlignsWithDirection } from './pattern-context';
+import type { SmartMoneyResult, SmartMoneyOrderBlock } from '@/compute/indicators/smart-money';
 
 function strengthForConfidence(confidence: number): SignalStrength {
   if (confidence >= 0.75) return 'strong';
@@ -51,6 +52,13 @@ export function detectStrongOrderBlockReaction(
   const atrValue = lastNonNull(atrArr);
   if (atrValue === null || atrValue <= 0) return null;
 
+  const heldBefore = (block: SmartMoneyOrderBlock, beforeTime: number): boolean =>
+    block.rejections.some((r) => r.closedBackOutside && r.time < beforeTime);
+
+  const hasFvgAtBlock = (sm: SmartMoneyResult, block: SmartMoneyOrderBlock): boolean =>
+    block.hasFvgConfluence ||
+    sm.fvgs.some((f) => f.type === block.type && !f.broken && f.bottom <= block.top && block.bottom <= f.top);
+
   // Fix #1: Use smartMoney.orderBlocks (correct formation-time structure
   // confluence) instead of superOrderBlocks (which gates against the current
   // structure snapshot). smartMoney is already passed as the 4th parameter
@@ -91,7 +99,7 @@ export function detectStrongOrderBlockReaction(
     const htfDirection = direction === 'buy' ? 'up' : 'down';
     if (htfStructure && htfStructure.trend !== htfDirection) continue;
 
-    let score = 2; // HTF bias satisfied
+    let score = htfStructure ? 2 : 0;
 
     // 2. Displacement that formed the block must be >= 2x ATR (a stronger
     //    bar than the >= 1.2x ATR baseline super-order-block.ts already
@@ -107,19 +115,16 @@ export function detectStrongOrderBlockReaction(
     }
 
     // 3. Zone quality: tested-hold is the strongest bounce setup.
-    if (block.status === 'tested-hold') score += 2;
+    if (heldBefore(block, prev.time)) score += 2;
 
     // 4. Kill Zone session bonus.
-    if (session === 'london' || session === 'newyork') score += 1;
+    if (isHighLiquiditySession(session)) score += 1;
 
-    // 5. OB/FVG confluence bonus (only when smart-money context is supplied).
-    if (smartMoney) {
-      const bonus = obFvgConfluenceBonus(smartMoney, last, direction, atrValue, intervalSeconds(candles));
-      if (bonus > 0) score += 1;
-    }
+    // 5. FVG confluence at the block zone.
+    if (smartMoney && hasFvgAtBlock(smartMoney, block)) score += 1;
 
-    // 6. Structural confirmation (MSB/BOS) after the reaction.
-    if (structure.bos) score += 1;
+    // 6. Structural confirmation (MSB/BOS) aligned with trade direction.
+    if (bosAlignsWithDirection(structure, direction)) score += 1;
 
     // 7. Premium/discount positioning: buys reacting in the lower
     //    (discount) half of the recent range, sells in the upper

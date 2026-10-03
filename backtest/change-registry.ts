@@ -173,6 +173,20 @@ export const LOGIC_CHANGE_LOG: LogicChangeRecord[] = [
     ],
     frozenAtMs: Date.UTC(2026, 9, 2),
   },
+  {
+    id: 'order-block-audit-20261003',
+    date: '2026-10-03',
+    description:
+      'Аудит стратегий Order Block (группа A, без смены весов и порогов): strong-order-block-reaction — tested-hold только по удержаниям до реакционной свечи (heldBefore), FVG-конфлюэнс через hasFvgAtBlock вместо OB-самоконфлюэнса, BOS только в сторону сделки (bosAlignsWithDirection), сессия через isHighLiquiditySession, +2 за HTF только при переданной htfStructure; order-block-breaker — бонус за displacement пробивающей свечи (hasBreakDisplacement) вместо константно-истинных флагов исходного блока, перебор всех свежих брейкеров; order-block-nested — HTF-зона, пробитая M1-хвостом после последней полной M5-группы, отбрасывается. Поле hasBreakDisplacement добавлено в SmartMoneyOrderBlock. OCCURRENCE_ALGORITHM_VERSION 15→16. Таблица горизонтов не перегенерирована.',
+    filesChanged: [
+      'src/compute/indicators/smart-money.ts',
+      'src/compute/patterns/strong-order-block-reaction.ts',
+      'src/compute/patterns/order-block-breaker.ts',
+      'src/compute/patterns/order-block-nested.ts',
+      'backtest/audit-version.ts',
+    ],
+    frozenAtMs: Date.UTC(2026, 9, 3),
+  },
 ];
 
 /**

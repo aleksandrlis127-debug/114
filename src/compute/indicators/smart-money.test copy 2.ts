@@ -386,21 +386,24 @@ describe('OB Breaker Block (calcSmartMoney.breakerBlocks)', () => {
   });
 });
 
+// Аудит OB 2026-10-03, п.5: флаги исходного блока у брейкера истинны по построению,
+// поэтому сила самого пробоя оценивается отдельно (hasBreakDisplacement).
 describe('OB Breaker Block — displacement of the breaking candle', () => {
   function seriesWithBreak(descend: 'gradual' | 'violent'): Candle[] {
     const candles: Candle[] = [];
     let t = 1700000000;
     for (let i = 0; i < 10; i++) { candles.push(candle(t, 100, 101, 99, 99, 1000)); t += 60; }
-    candles.push(candle(t, 99, 98, 97, 97.5, 1000)); t += 60;
-    candles.push(candle(t, 97.5, 103, 97, 102, 1500)); t += 60;
+    candles.push(candle(t, 99, 98, 97, 97.5, 1000)); t += 60;      // bullish OB candle: zone [97, 98]
+    candles.push(candle(t, 97.5, 103, 97, 102, 1500)); t += 60;    // impulse above the OB high
     if (descend === 'violent') {
-      candles.push(candle(t, 102, 102.5, 95, 95.5, 1000)); t += 60;
+      candles.push(candle(t, 102, 102.5, 95, 95.5, 1000)); t += 60; // closes through the zone with a huge range
     } else {
+      // Постепенный спуск маленькими свечами: закрытие под зоной происходит «на тик».
       let px = 102;
       while (px - 0.9 >= 97.2) {
         candles.push(candle(t, px, px + 0.05, px - 0.95, px - 0.9, 1000)); t += 60; px -= 0.9;
       }
-      candles.push(candle(t, px, px + 0.05, px - 0.2, 96.9, 1000)); t += 60;
+      candles.push(candle(t, px, px + 0.05, px - 0.2, 96.9, 1000)); t += 60; // lazy close < 97
     }
     for (let i = 0; i < 6; i++) { candles.push(candle(t, 96.9, 97.4, 96.4, 96.9, 1000)); t += 60; }
     return candles;

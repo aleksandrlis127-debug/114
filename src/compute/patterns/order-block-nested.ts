@@ -52,26 +52,30 @@ export function detectHtfObZones(candles: Candle[]): HtfObZone[] {
   // reused rather than duplicated — it just returns an empty result below
   // that bar, same as if there was nothing to find.
   const htfSmartMoney = calcSmartMoney(htf, {
-    // Displacement stays required (the default) — that's the "this is a
-    // genuine institutional-size impulse, not just any directional close"
-    // gate, and dropping it would make the HTF side of this pattern
-    // trivially easy to satisfy on any resampled series.
-    //
-    // Structure confluence (BOS/CHoCH within the confirmation window) is
-    // turned OFF here, deliberately: it's a *secondary* structural
-    // confirmation on top of displacement, and requiring a full pivot-
-    // based break at the coarse HTF scale — computed from a resampled
-    // synthetic series that may only span a few dozen bars — is brittle
-    // and would suppress otherwise-valid nested setups. The M1 side of
-    // this pattern (smartMoney.orderBlocks, filtered below) is already
-    // computed with the app's default requireStructureConfluence: true,
-    // so genuine structural quality is still enforced at the primary
-    // timeframe. Same asymmetry fvg-nested.ts already accepts implicitly
-    // by using the structure-agnostic detectFvgGeometry for its HTF side.
     requireStructureConfluence: false,
   });
+  const intervalSec = candles.length >= 2 ? candles[1].time - candles[0].time : 60;
+
+  // M1 tail: candles after the last complete HTF group. HTF groups are
+  // HTF_FACTOR candles wide; the tail starts at lastGroup.time +
+  // HTF_FACTOR * intervalSec. An HTF OB zone is considered broken not
+  // only when calcSmartMoney says status === 'broken' (computed on the
+  // resampled series) but also when an M1 close in the tail pierced
+  // through it — the resampled series can't see the incomplete group.
+  const lastHtfBarTime = htf.length > 0 ? htf[htf.length - 1].time : 0;
+  const tailStart = lastHtfBarTime + HTF_FACTOR * intervalSec;
+
   return htfSmartMoney.orderBlocks
-    .filter((ob) => ob.status !== 'broken')
+    .filter((ob) => {
+      if (ob.status === 'broken') return false;
+      // Check M1 tail for a close through the zone.
+      for (const c of candles) {
+        if (c.time < tailStart) continue;
+        if (ob.type === 'bullish' && c.close < ob.bottom) return false;
+        if (ob.type === 'bearish' && c.close > ob.top) return false;
+      }
+      return true;
+    })
     .map((ob) => ({ top: ob.top, bottom: ob.bottom, type: ob.type, time: ob.time }));
 }
 

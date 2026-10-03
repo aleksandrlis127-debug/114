@@ -28,6 +28,7 @@ function mockOb(
     hasLiquiditySweep: true,
     hasDisplacement: true,
     hasStructureConfluence: true,
+    hasBreakDisplacement: true,
     ...overrides,
   };
 }
@@ -202,6 +203,113 @@ describe('detectOrderBlockNested (Nested OB — HTF order block containing a fre
     const smartMoney: SmartMoneyResult = { ...EMPTY_SMART_MONEY, orderBlocks: [farOb] };
     const result = detectOrderBlockNested(m1, NEUTRAL_SNAPSHOT, 'london', smartMoney);
     expect(result).toBeNull();
+  });
+});
+
+// Аудит OB 2026-10-03, п.7: перебор всех кандидатов и бонус за hasBreakDisplacement.
+describe('detectOrderBlockBreaker — iterate all candidates + hasBreakDisplacement bonus (п.7)', () => {
+  it('tries the most recent valid breaker even when an older one is first in the array', () => {
+    const candles = risingWarmup(34, 1700000000, 100);
+    // patternCandle: wicks into [104, 105] zone, closes back above.
+    candles.push(candle(candles[candles.length - 1].time + 60, 106, 106.3, 106.5, 104.1, 100));
+    candles.push(candle(candles[candles.length - 1].time + 60, 106.4, 107, 107.2, 106.3, 300));
+
+    // An older breaker that does NOT overlap the pattern candle's wick —
+    // should be skipped, not block the newer one from being found.
+    const oldBad = mockOb({ top: 110, bottom: 109, time: candles[0].time + 60, type: 'bullish' });
+    // A newer breaker in the [104, 105] zone — should be tried and pass.
+    const newGood = mockOb({ top: 105, bottom: 104, time: candles[candles.length - 6].time, type: 'bullish' });
+    const smartMoney: SmartMoneyResult = { ...EMPTY_SMART_MONEY, breakerBlocks: [oldBad, newGood] };
+    const snapshot: IndicatorSnapshot = { ...NEUTRAL_SNAPSHOT, emaSlow: 100 };
+
+    const result = detectOrderBlockBreaker(candles, snapshot, 'london', smartMoney);
+    expect(result).not.toBeNull();
+    expect(result?.direction).toBe('buy');
+  });
+
+  it('gives a higher score when hasBreakDisplacement is true vs false', () => {
+    const candles = risingWarmup(34, 1700000000, 100);
+    candles.push(candle(candles[candles.length - 1].time + 60, 106, 106.3, 106.5, 104.1, 100));
+    candles.push(candle(candles[candles.length - 1].time + 60, 106.4, 107, 107.2, 106.3, 300));
+    const snapshot: IndicatorSnapshot = { ...NEUTRAL_SNAPSHOT, emaSlow: 100 };
+
+    const withDisp = mockOb({ top: 105, bottom: 104, time: candles[candles.length - 6].time, type: 'bullish', hasBreakDisplacement: true });
+    const withoutDisp = mockOb({ top: 105, bottom: 104, time: candles[candles.length - 6].time, type: 'bullish', hasBreakDisplacement: false });
+
+    const r1 = detectOrderBlockBreaker(candles, snapshot, 'london', { ...EMPTY_SMART_MONEY, breakerBlocks: [withDisp] });
+    const r2 = detectOrderBlockBreaker(candles, snapshot, 'london', { ...EMPTY_SMART_MONEY, breakerBlocks: [withoutDisp] });
+    // With displacement bonus the score is higher; without it the signal
+    // may still fire but at a lower confidence, or not at all.
+    if (r1 && r2) {
+      expect(r1.confidence).toBeGreaterThan(r2.confidence);
+    }
+    expect(r1).not.toBeNull();
+  });
+});
+
+// Аудит OB 2026-10-03, п.8: HTF-зона, пробитая M1-хвостом, отбрасывается.
+describe('detectHtfObZones — M1 tail break detection (п.8)', () => {
+  it('discards a bullish HTF zone when an M1 close in the tail drops below its bottom', () => {
+    // Build the same HTF zone as the nested happy-path test, then add M1
+    // candles in the incomplete tail that close below the zone bottom.
+    const m1: Candle[] = [];
+    let t = 1700000000;
+    const pushGroup = (build: (k: number) => Candle) => {
+      for (let k = 0; k < 5; k++) { m1.push(build(k)); t += 60; }
+    };
+    for (let g = 0; g < 20; g++) {
+      const base = 100 + (g % 2 === 0 ? 0.05 : -0.05);
+      pushGroup((k) => candle(t, base, base + (k === 4 ? 0.02 : 0), base + 0.1, base - 0.1, 100));
+    }
+    pushGroup((k) => (k === 0
+      ? candle(t, 100.1, 99.8, 100.15, 99.8, 100)
+      : candle(t, 99.8, 99.8, 99.85, 99.75, 100)));
+    pushGroup((k) => (k === 4
+      ? candle(t, 100, 103, 103, 99.9, 500)
+      : candle(t, 99.8 + k * 0.5, 100 + k * 0.5, 100 + k * 0.5, 99.7 + k * 0.5, 200)));
+    for (let g = 0; g < 4; g++) {
+      pushGroup(() => candle(t, 103, 103.2, 103.5, 102.8, 100));
+    }
+    // Tail: 3 incomplete M1 candles (less than HTF_FACTOR=5). The last
+    // one closes below the HTF zone bottom (99.75).
+    m1.push(candle(t, 103.2, 102.5, 103.3, 102.4, 100)); t += 60;
+    m1.push(candle(t, 102.5, 101, 102.6, 100.9, 100)); t += 60;
+    m1.push(candle(t, 101, 99.5, 101.1, 99.4, 100)); t += 60;
+
+    const zones = detectHtfObZones(m1);
+    // The bullish zone [99.75, 100.15] must NOT appear — the M1 tail
+    // closed below 99.75, piercing it.
+    const bullZone = zones.find((z) => z.type === 'bullish' && z.bottom <= 100.15 && z.top >= 99.75);
+    expect(bullZone).toBeUndefined();
+  });
+
+  it('keeps a bullish HTF zone when the M1 tail does not close below it', () => {
+    const m1: Candle[] = [];
+    let t = 1700000000;
+    const pushGroup = (build: (k: number) => Candle) => {
+      for (let k = 0; k < 5; k++) { m1.push(build(k)); t += 60; }
+    };
+    for (let g = 0; g < 20; g++) {
+      const base = 100 + (g % 2 === 0 ? 0.05 : -0.05);
+      pushGroup((k) => candle(t, base, base + (k === 4 ? 0.02 : 0), base + 0.1, base - 0.1, 100));
+    }
+    pushGroup((k) => (k === 0
+      ? candle(t, 100.1, 99.8, 100.15, 99.8, 100)
+      : candle(t, 99.8, 99.8, 99.85, 99.75, 100)));
+    pushGroup((k) => (k === 4
+      ? candle(t, 100, 103, 103, 99.9, 500)
+      : candle(t, 99.8 + k * 0.5, 100 + k * 0.5, 100 + k * 0.5, 99.7 + k * 0.5, 200)));
+    for (let g = 0; g < 4; g++) {
+      pushGroup(() => candle(t, 103, 103.2, 103.5, 102.8, 100));
+    }
+    // Tail: 3 incomplete M1 candles that stay well above the zone bottom.
+    m1.push(candle(t, 103.2, 102.8, 103.3, 102.7, 100)); t += 60;
+    m1.push(candle(t, 102.8, 102.5, 102.9, 102.4, 100)); t += 60;
+    m1.push(candle(t, 102.5, 102.2, 102.6, 102.1, 100)); t += 60;
+
+    const zones = detectHtfObZones(m1);
+    const bullZone = zones.find((z) => z.type === 'bullish' && z.bottom <= 100.15 && z.top >= 99.75);
+    expect(bullZone).toBeDefined();
   });
 });
 

@@ -442,8 +442,8 @@ describe('detectStrongOrderBlockReaction', () => {
 
   it('detects a bullish reaction with a high score (HTF bias + strong displacement + BOS + Kill Zone)', () => {
     const candles = buildScenario();
-    const sm: SmartMoneyResult = { ...EMPTY_SMART_MONEY, orderBlocks: [mockOb({ top: 107, bottom: 100, time: 20, type: 'bullish', status: 'tested-hold' })] };
-    const result = detectStrongOrderBlockReaction(candles, UP_STRUCTURE_FOR_OB, 'london', sm);
+    const sm: SmartMoneyResult = { ...EMPTY_SMART_MONEY, orderBlocks: [mockOb({ top: 107, bottom: 100, time: 20, type: 'bullish', status: 'tested-hold', rejections: [{ time: 27, wickRatio: 0.6, closedBackOutside: true }] })] };
+    const result = detectStrongOrderBlockReaction(candles, UP_STRUCTURE_FOR_OB, 'london', sm, 14, UP_STRUCTURE_FOR_OB);
     expect(result).not.toBeNull();
     expect(result?.name).toBe('strong-order-block-reaction');
     expect(result?.direction).toBe('buy');
@@ -452,27 +452,89 @@ describe('detectStrongOrderBlockReaction', () => {
 
   it('returns null against the HTF bias (block direction conflicts with a genuinely higher-timeframe trend)', () => {
     const candles = buildScenario();
-    const sm: SmartMoneyResult = { ...EMPTY_SMART_MONEY, orderBlocks: [mockOb({ top: 107, bottom: 100, time: 20, type: 'bullish', status: 'tested-hold' })] };
-    // BUGFIX (аудит 2026-09-06, п.3): HTF bias теперь гейтится отдельным
-    // параметром htfStructure (6-й позиционный аргумент), а не тем же
-    // `structure`, что и M1 BOS-подтверждение (structure остаётся
-    // DOWN_STRUCTURE_FOR_OB здесь для сохранения прежнего сценария M1-
-    // контекста) — без явно переданного htfStructure гейт теперь fail-open
-    // (см. JSDoc в strong-order-block-reaction.ts), поэтому конфликтующий
-    // тренд нужно передать явно.
+    const sm: SmartMoneyResult = { ...EMPTY_SMART_MONEY, orderBlocks: [mockOb({ top: 107, bottom: 100, time: 20, type: 'bullish', status: 'tested-hold', rejections: [{ time: 27, wickRatio: 0.6, closedBackOutside: true }] })] };
     expect(detectStrongOrderBlockReaction(candles, DOWN_STRUCTURE_FOR_OB, 'london', sm, 14, DOWN_STRUCTURE_FOR_OB)).toBeNull();
   });
 
   it('scores lower without BOS confirmation and outside a Kill Zone session', () => {
     const candles = buildScenario();
-    const sm: SmartMoneyResult = { ...EMPTY_SMART_MONEY, orderBlocks: [mockOb({ top: 107, bottom: 100, time: 20, type: 'bullish', status: 'tested-hold' })] };
-    const full = detectStrongOrderBlockReaction(candles, UP_STRUCTURE_FOR_OB, 'london', sm);
-    const reduced = detectStrongOrderBlockReaction(candles, UP_STRUCTURE_NO_BOS, 'sydney', sm);
+    const sm: SmartMoneyResult = { ...EMPTY_SMART_MONEY, orderBlocks: [mockOb({ top: 107, bottom: 100, time: 20, type: 'bullish', status: 'tested-hold', rejections: [{ time: 27, wickRatio: 0.6, closedBackOutside: true }] })] };
+    const full = detectStrongOrderBlockReaction(candles, UP_STRUCTURE_FOR_OB, 'london', sm, 14, UP_STRUCTURE_FOR_OB);
+    const reduced = detectStrongOrderBlockReaction(candles, UP_STRUCTURE_NO_BOS, 'sydney', sm, 14, UP_STRUCTURE_FOR_OB);
     expect(full).not.toBeNull();
-    // Both may or may not clear the entry threshold depending on the other
-    // scored factors, but the reduced-factor case must never score higher.
     if (reduced) {
       expect(reduced.confidence).toBeLessThan(full!.confidence);
+    }
+  });
+
+  // Аудит OB 2026-10-03: регрессионные тесты на каждый исправленный пункт.
+  function confOf(r: ReturnType<typeof detectStrongOrderBlockReaction>): number {
+    return r?.confidence ?? -1;
+  }
+
+  it('п.2: tested-hold only counts rejections strictly before the reaction candle', () => {
+    const candles = buildScenario();
+    // rejections AFTER prev.time → should NOT count as heldBefore
+    const smAfter: SmartMoneyResult = { ...EMPTY_SMART_MONEY, orderBlocks: [mockOb({ top: 107, bottom: 100, time: 20, type: 'bullish', status: 'tested-hold', rejections: [{ time: 28.5, wickRatio: 0.6, closedBackOutside: true }] })] };
+    // rejections BEFORE prev.time → should count as heldBefore (+2)
+    const smBefore: SmartMoneyResult = { ...EMPTY_SMART_MONEY, orderBlocks: [mockOb({ top: 107, bottom: 100, time: 20, type: 'bullish', status: 'tested-hold', rejections: [{ time: 27, wickRatio: 0.6, closedBackOutside: true }] })] };
+    const after = detectStrongOrderBlockReaction(candles, UP_STRUCTURE_FOR_OB, 'london', smAfter, 14, UP_STRUCTURE_FOR_OB);
+    const before = detectStrongOrderBlockReaction(candles, UP_STRUCTURE_FOR_OB, 'london', smBefore, 14, UP_STRUCTURE_FOR_OB);
+    expect(before).not.toBeNull();
+    if (after) {
+      expect(confOf(after)).toBeLessThan(confOf(before));
+    }
+  });
+
+  it('п.3: FVG confluence via hasFvgAtBlock, not obFvgConfluenceBonus', () => {
+    const candles = buildScenario();
+    // No FVG at the block → no +1 from FVG confluence
+    const smNoFvg: SmartMoneyResult = { ...EMPTY_SMART_MONEY, orderBlocks: [mockOb({ top: 107, bottom: 100, time: 20, type: 'bullish', status: 'tested-hold', hasFvgConfluence: false, rejections: [{ time: 27, wickRatio: 0.6, closedBackOutside: true }] })] };
+    // FVG at the block → +1
+    const smWithFvg: SmartMoneyResult = { ...EMPTY_SMART_MONEY, fvgs: [{ top: 107, bottom: 100, time: 19, type: 'bullish', broken: false, endTime: null, touchedTime: null, ce: 103.5, hasDisplacement: true, hasOBConfluence: true, hasBOSConfluence: true }], orderBlocks: [mockOb({ top: 107, bottom: 100, time: 20, type: 'bullish', status: 'tested-hold', hasFvgConfluence: false, rejections: [{ time: 27, wickRatio: 0.6, closedBackOutside: true }] })] };
+    const noFvg = detectStrongOrderBlockReaction(candles, UP_STRUCTURE_FOR_OB, 'london', smNoFvg, 14, UP_STRUCTURE_FOR_OB);
+    const withFvg = detectStrongOrderBlockReaction(candles, UP_STRUCTURE_FOR_OB, 'london', smWithFvg, 14, UP_STRUCTURE_FOR_OB);
+    expect(withFvg).not.toBeNull();
+    if (noFvg) {
+      expect(confOf(noFvg)).toBeLessThan(confOf(withFvg));
+    }
+  });
+
+  it('п.4: BOS +1 only when bosAlignsWithDirection', () => {
+    const candles = buildScenario();
+    const sm: SmartMoneyResult = { ...EMPTY_SMART_MONEY, orderBlocks: [mockOb({ top: 107, bottom: 100, time: 20, type: 'bullish', status: 'tested-hold', rejections: [{ time: 27, wickRatio: 0.6, closedBackOutside: true }] })] };
+    // BOS in wrong direction (sell direction, but block is bullish/buy)
+    const wrongBos: MarketStructure = { trend: 'up', bos: true, choch: false, swingHigh: 200, swingLow: 90, provisional: false, bosDirection: 'down' };
+    // BOS in right direction
+    const rightBos: MarketStructure = { trend: 'up', bos: true, choch: false, swingHigh: 200, swingLow: 90, provisional: false, bosDirection: 'up' };
+    const wrong = detectStrongOrderBlockReaction(candles, wrongBos, 'london', sm, 14, UP_STRUCTURE_FOR_OB);
+    const right = detectStrongOrderBlockReaction(candles, rightBos, 'london', sm, 14, UP_STRUCTURE_FOR_OB);
+    expect(right).not.toBeNull();
+    if (wrong) {
+      expect(confOf(wrong)).toBeLessThan(confOf(right));
+    }
+  });
+
+  it('п.5: session bonus via isHighLiquiditySession (overlap counts, tokyo does not)', () => {
+    const candles = buildScenario();
+    const sm: SmartMoneyResult = { ...EMPTY_SMART_MONEY, orderBlocks: [mockOb({ top: 107, bottom: 100, time: 20, type: 'bullish', status: 'tested-hold', rejections: [{ time: 27, wickRatio: 0.6, closedBackOutside: true }] })] };
+    const tokyo = detectStrongOrderBlockReaction(candles, UP_STRUCTURE_FOR_OB, 'tokyo', sm, 14, UP_STRUCTURE_FOR_OB);
+    const overlap = detectStrongOrderBlockReaction(candles, UP_STRUCTURE_FOR_OB, 'overlap', sm, 14, UP_STRUCTURE_FOR_OB);
+    expect(overlap).not.toBeNull();
+    if (tokyo) {
+      expect(confOf(tokyo)).toBeLessThan(confOf(overlap));
+    }
+  });
+
+  it('п.6: +2 for HTF only when htfStructure is passed (null vs passed)', () => {
+    const candles = buildScenario();
+    const sm: SmartMoneyResult = { ...EMPTY_SMART_MONEY, orderBlocks: [mockOb({ top: 107, bottom: 100, time: 20, type: 'bullish', status: 'tested-hold', rejections: [{ time: 27, wickRatio: 0.6, closedBackOutside: true }] })] };
+    // Pass null as htfStructure → no +2 for HTF (mapped to undefined internally)
+    const withoutHtf = detectStrongOrderBlockReaction(candles, UP_STRUCTURE_FOR_OB, 'london', sm, 14, null as unknown as undefined);
+    const withHtf = detectStrongOrderBlockReaction(candles, UP_STRUCTURE_FOR_OB, 'london', sm, 14, UP_STRUCTURE_FOR_OB);
+    expect(withHtf).not.toBeNull();
+    if (withoutHtf) {
+      expect(confOf(withoutHtf)).toBeLessThan(confOf(withHtf));
     }
   });
 });

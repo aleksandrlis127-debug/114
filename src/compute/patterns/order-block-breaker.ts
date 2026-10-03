@@ -61,58 +61,55 @@ export function detectOrderBlockBreaker(
       MAX_AGE_BARS,
     );
     if (candidates.length === 0) continue;
-    const breaker = candidates[candidates.length - 1];
+    const ordered = [...candidates].sort((a, b) => b.time - a.time);
 
-    // Wicked into the breaker zone, then closed back out on the zone's own
-    // (post-inversion) favorable side — same "entered, then closedBackOutside"
-    // criterion analyzeOBTouches uses for a live order block's own
-    // tested-hold reactions, applied here to confirm a genuine retest
-    // rather than a simple pass-through.
-    const enteredZone = patternCandle.low <= breaker.top && patternCandle.high >= breaker.bottom;
-    if (!enteredZone) continue;
-    const closedBackOutside = direction === 'buy'
-      ? patternCandle.close >= breaker.top
-      : patternCandle.close <= breaker.bottom;
-    if (!closedBackOutside) continue;
+    for (const breaker of ordered) {
+      // Wicked into the breaker zone, then closed back out on the zone's own
+      // (post-inversion) favorable side — same "entered, then closedBackOutside"
+      // criterion analyzeOBTouches uses for a live order block's own
+      // tested-hold reactions, applied here to confirm a genuine retest
+      // rather than a simple pass-through.
+      const enteredZone = patternCandle.low <= breaker.top && patternCandle.high >= breaker.bottom;
+      if (!enteredZone) continue;
+      const closedBackOutside = direction === 'buy'
+        ? patternCandle.close >= breaker.top
+        : patternCandle.close <= breaker.bottom;
+      if (!closedBackOutside) continue;
 
-    const wr = wickRatio(patternCandle, direction === 'buy' ? 'lower' : 'upper');
-    if (wr < MIN_WICK_RATIO) continue;
+      const wr = wickRatio(patternCandle, direction === 'buy' ? 'lower' : 'upper');
+      if (wr < MIN_WICK_RATIO) continue;
 
-    const confirmation = nextCandleConfirmation(patternCandle, last, direction);
-    if (!confirmation.confirmed) continue;
+      const confirmation = nextCandleConfirmation(patternCandle, last, direction);
+      if (!confirmation.confirmed) continue;
 
-    const atrValue = snapshot?.atr ?? null;
-    const rsiFast = lastNonNull(calcRsi(candles.map((c) => c.close), 7));
-    const vwapValue = vwapLast(candles, vwapSessionPeriod(candles)).value;
-    const ema50Value = snapshot?.emaSlow ?? null;
-    const volRatio = volumeRatio(candles, candles.length - 1, 20);
+      const atrValue = snapshot?.atr ?? null;
+      const rsiFast = lastNonNull(calcRsi(candles.map((c) => c.close), 7));
+      const vwapValue = vwapLast(candles, vwapSessionPeriod(candles)).value;
+      const ema50Value = snapshot?.emaSlow ?? null;
+      const volRatio = volumeRatio(candles, candles.length - 1, 20);
 
-    const score = scoreFvgSignal({
-      emaAligned: ema50AlignedOk(direction, last.close, ema50Value),
-      vwapAligned: vwapSideOk(direction, last.close, vwapValue),
-      rsiConfirmed: rsiConfirmOk(direction, rsiFast),
-      volumeConfirmed: volRatio > 1.5,
-      // This strategy's own defining confluence is a well-formed ORIGIN
-      // block: a breaker inherited from a genuine, structurally confirmed
-      // order block (both flags copied over unchanged in smart-money.ts's
-      // breaker-generation loop) is a materially stronger breaker than one
-      // from a marginal/unconfirmed block.
-      confluenceBonus: breaker.hasDisplacement && breaker.hasStructureConfluence,
-      atrNormal: atrNotSpiking(last, atrValue),
-      sessionBoosted: session === 'london' || session === 'newyork' || session === 'overlap',
-    });
-    if (score < FVG_SCORE_MIN_ENTRY) continue;
+      const score = scoreFvgSignal({
+        emaAligned: ema50AlignedOk(direction, last.close, ema50Value),
+        vwapAligned: vwapSideOk(direction, last.close, vwapValue),
+        rsiConfirmed: rsiConfirmOk(direction, rsiFast),
+        volumeConfirmed: volRatio > 1.5,
+        confluenceBonus: breaker.hasBreakDisplacement === true,
+        atrNormal: atrNotSpiking(last, atrValue),
+        sessionBoosted: session === 'london' || session === 'newyork' || session === 'overlap',
+      });
+      if (score < FVG_SCORE_MIN_ENTRY) continue;
 
-    const confidence = Math.max(0, Math.min(1, (score / FVG_SCORE_MAX) * confirmation.multiplier));
-    return {
-      name: 'order-block-breaker',
-      direction,
-      confidence,
-      strength: strengthForFvgScore(confidence),
-      time: last.time,
-      volumeConfirmed: volRatio > 1.5,
-      confirmedByNextCandle: true,
-    };
+      const confidence = Math.max(0, Math.min(1, (score / FVG_SCORE_MAX) * confirmation.multiplier));
+      return {
+        name: 'order-block-breaker',
+        direction,
+        confidence,
+        strength: strengthForFvgScore(confidence),
+        time: last.time,
+        volumeConfirmed: volRatio > 1.5,
+        confirmedByNextCandle: true,
+      };
+    }
   }
 
   return null;

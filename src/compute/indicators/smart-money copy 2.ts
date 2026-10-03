@@ -72,7 +72,17 @@ export interface SmartMoneyOrderBlock {
   // exactly at the current bar. Gates the returned list by default (see
   // `requireStructureConfluence` below).
   hasStructureConfluence: boolean;
-  /** Only for breakerBlocks: the breaking candle itself was displacement (>= minDisplacementAtrMultiple × ATR). Optional — old literals without it are valid (treated as "not confirmed"). */
+  /**
+   * Только для breakerBlocks (у обычных ордер-блоков не заполняется): пробивающая
+   * свеча (та, что закрылась сквозь зону и превратила блок в брейкер) сама была
+   * displacement — её диапазон >= `minDisplacementAtrMultiple` × ATR, те же
+   * правило и множитель, что у hasDisplacement. «Ленивый» пробой на один тик
+   * не считается брейкером высокого качества (ICT: смещение сквозь структуру).
+   * Раньше сила брейкера оценивалась флагами ИСХОДНОГО блока, которые у любого
+   * брейкера истинны по построению (orderBlocks уже отфильтрован по ним) —
+   * поэтому они ничего не различали. Опциональное поле: старые литералы/моки
+   * без него остаются валидными (трактуются как «не подтверждено»).
+   */
   hasBreakDisplacement?: boolean;
 }
 
@@ -385,6 +395,8 @@ export function calcSmartMoney(candles: Candle[], options?: SmartMoneyOptions): 
     // identical terms.
     const after = breakIdx >= 0 ? candles.slice(breakIdx + 1) : [];
     const touches = analyzeOBTouches(after, invType, ob.top, ob.bottom);
+    // Сама пробивающая свеча — displacement или «ленивый» пробой (см. поле).
+    const hasBreakDisplacement = breakIdx >= 0 && hasObDisplacement(candles[breakIdx]);
 
     breakerBlocks.push({
       top: ob.top, bottom: ob.bottom, time: ob.endTime, type: invType,
@@ -404,7 +416,7 @@ export function calcSmartMoney(candles: Candle[], options?: SmartMoneyOptions): 
       // from their origin FVG below.
       hasDisplacement: ob.hasDisplacement, hasStructureConfluence: ob.hasStructureConfluence,
       hasFvgConfluence: ob.hasFvgConfluence, hasLiquiditySweep: ob.hasLiquiditySweep,
-      hasBreakDisplacement: breakIdx >= 0 && hasObDisplacement(candles[breakIdx]),
+      hasBreakDisplacement,
     });
   }
 

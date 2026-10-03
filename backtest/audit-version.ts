@@ -77,8 +77,18 @@
  *     возможен в узком окне (confidence свипа ≥0.9, тело 0.8–1.0 ATR,
  *     подтверждённая структура, объём ≥2.0×); на Binance ETH/BTC (288 тыс.
  *     баров каждый) число сигналов не изменилось (9 и 11).
+ * 16 — аудит Order Block 2026-10-03 (группа A, без смены весов и порогов):
+ *     strong-order-block-reaction — tested-hold только по удержаниям до реакционной
+ *     свечи, FVG-конфлюэнс вместо OB-самоконфлюэнса, BOS только в сторону сделки,
+ *     overlap как Kill Zone, +2 за HTF только при переданной HTF-структуре;
+ *     order-block-breaker — бонус за displacement пробивающей свечи
+ *     (hasBreakDisplacement) вместо константно-истинных флагов исходного блока,
+ *     перебор всех свежих брейкеров; order-block-nested — HTF-зона, пробитая
+ *     M1-хвостом после последней полной M5-группы, отбрасывается. Меняет состав
+ *     и confidence occurrences трёх стратегий, поэтому кэш версии 15 отдавал бы
+ *     результаты прежних детекторов.
  */
-export const OCCURRENCE_ALGORITHM_VERSION = 15;
+export const OCCURRENCE_ALGORITHM_VERSION = 16;
 
 /**
  * Версия СХЕМЫ выходного JSON horizon-audit.
