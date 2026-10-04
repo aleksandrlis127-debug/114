@@ -24,7 +24,7 @@ const MAX_AGE_BARS = 15;
 const MIN_HISTORY = 60;
 // M1 -> synthetic M5 aggregation factor for the HTF-approximation zone
 // (see resampleCandles doc-comment in fvg-strategies-shared.ts).
-const HTF_FACTOR = 5;
+export const HTF_FACTOR = 5;
 
 interface HtfFvgZone {
   top: number;

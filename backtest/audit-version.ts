@@ -95,8 +95,12 @@
  *     hasBOSConfluence учитывает BOS на средней/правой свече FVG. Меняет состав
  *     occurrences четырёх стратегий, поэтому кэш версии 16 отдавал бы
  *     результаты прежних детекторов.
+ * 18 — три новых M1-входа на FVG (без смены весов и порогов): fvg-htf-mss,
+ *     fvg-sweep-return, fvg-inversion-retest. Новые имена паттернов дают новые
+ *     occurrences и меняют набор HORIZON_GRIDS/ALL_FEATURES, поэтому кэш
+ *     версии 17 не содержал бы их результатов.
  */
-export const OCCURRENCE_ALGORITHM_VERSION = 17;
+export const OCCURRENCE_ALGORITHM_VERSION = 18;
 
 /**
  * Версия СХЕМЫ выходного JSON horizon-audit.

@@ -213,6 +213,24 @@ function evaluateEvidence(
       const bonus = 0.35 * topPattern.confidence;
       indicatorBonus += bonus;
       pushExtra('strategy', topPattern.name, bonus, `FVG Return strategy (+${bonus.toFixed(2)})`, topPattern.confidence);
+    } else if (topPattern.name === 'fvg-htf-mss') {
+      // Стартовый вес = у fvg-rejection (0.4): нет калибровки по реальным
+      // исходам, пересмотреть после первого horizon-audit новых входов.
+      const bonus = 0.4 * topPattern.confidence;
+      indicatorBonus += bonus;
+      pushExtra('strategy', topPattern.name, bonus, `FVG HTF+MSS strategy (+${bonus.toFixed(2)})`, topPattern.confidence);
+    } else if (topPattern.name === 'fvg-sweep-return') {
+      // Стартовый вес = у fvg-rejection (0.4): нет калибровки по реальным
+      // исходам, пересмотреть после первого horizon-audit новых входов.
+      const bonus = 0.4 * topPattern.confidence;
+      indicatorBonus += bonus;
+      pushExtra('strategy', topPattern.name, bonus, `FVG Sweep Return strategy (+${bonus.toFixed(2)})`, topPattern.confidence);
+    } else if (topPattern.name === 'fvg-inversion-retest') {
+      // Стартовый вес = у fvg-rejection (0.4): нет калибровки по реальным
+      // исходам, пересмотреть после первого horizon-audit новых входов.
+      const bonus = 0.4 * topPattern.confidence;
+      indicatorBonus += bonus;
+      pushExtra('strategy', topPattern.name, bonus, `FVG Inversion Retest strategy (+${bonus.toFixed(2)})`, topPattern.confidence);
     } else if (topPattern.name === 'order-block-nested') {
       // No source-doc priority for these two (they're new, not part of the
       // original "Стратегии на FVG" spec) — weighted below fvg-nested's

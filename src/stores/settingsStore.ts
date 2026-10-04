@@ -32,6 +32,9 @@ export const ALL_PATTERNS: readonly PatternName[] = [
   'fvg-breaker-block',
   'fvg-nested',
   'fvg-rejection',
+  'fvg-htf-mss',
+  'fvg-sweep-return',
+  'fvg-inversion-retest',
   'order-block-breaker',
   'order-block-nested',
   // Previously missing — fully implemented and tested in patterns/index.ts,
@@ -212,7 +215,7 @@ export const useSettingsStore = create<SettingsState>()(
     }),
     {
       name: 'terminal-settings',
-      version: 14,
+      version: 15,
       storage: createJSONStorage(() => localStorage),
       partialize: (s) => ({
         symbolId: s.symbolId,
@@ -407,6 +410,17 @@ export const useSettingsStore = create<SettingsState>()(
           const currentPatterns = Array.isArray(s.activePatterns) ? (s.activePatterns as string[]) : [];
           if (!currentPatterns.includes('harmonic-pattern')) {
             s.activePatterns = [...currentPatterns, 'harmonic-pattern'];
+          }
+        }
+        if (version < 15) {
+          // Три новых M1-входа на FVG (fvg-htf-mss, fvg-sweep-return,
+          // fvg-inversion-retest) — аддитивный домердж в сохранённый
+          // activePatterns, как version < 9/12/14: без него has() в
+          // patterns/index.ts для существующих пользователей всегда false.
+          const currentPatterns = Array.isArray(s.activePatterns) ? (s.activePatterns as string[]) : [];
+          const missing = ['fvg-htf-mss', 'fvg-sweep-return', 'fvg-inversion-retest'].filter((p) => !currentPatterns.includes(p));
+          if (missing.length > 0) {
+            s.activePatterns = [...currentPatterns, ...missing];
           }
         }
         return s;

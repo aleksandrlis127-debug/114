@@ -36,6 +36,9 @@ import { detectFvgReturn } from './fvg-return';
 import { detectFvgBreakerBlock } from './fvg-breaker-block';
 import { detectFvgNested } from './fvg-nested';
 import { detectFvgRejection } from './fvg-rejection';
+import { detectFvgHtfMss } from './fvg-htf-mss';
+import { detectFvgSweepReturn } from './fvg-sweep-return';
+import { detectFvgInversionRetest } from './fvg-inversion-retest';
 import { detectOrderBlockBreaker } from './order-block-breaker';
 import { detectOrderBlockNested } from './order-block-nested';
 import { detectHarmonicPattern, type HarmonicConfig } from './harmonic-pattern';
@@ -393,6 +396,11 @@ export function detectAllPatterns(
   if (has('fvg-breaker-block')) { const p = detectFvgBreakerBlock(candles, snapshot, ctx.session, ctx.smartMoney); if (p) raw.push(p); }
   if (has('fvg-nested')) { const p = detectFvgNested(candles, snapshot, ctx.session, ctx.smartMoney); if (p) raw.push(p); }
   if (has('fvg-rejection')) { const p = detectFvgRejection(candles, snapshot, ctx.session, ctx.smartMoney); if (p) raw.push(p); }
+  // Три альтернативные идеи входа на M1 (fvg-m1-entry-shared.ts): HTF-зона + слом
+  // структуры, снятие ликвидности + возврат в FVG, ретест инверсного FVG.
+  if (has('fvg-htf-mss')) { const p = detectFvgHtfMss(candles, snapshot, ctx.session, ctx.smartMoney); if (p) raw.push(p); }
+  if (has('fvg-sweep-return')) { const p = detectFvgSweepReturn(candles, snapshot, ctx.session, ctx.smartMoney); if (p) raw.push(p); }
+  if (has('fvg-inversion-retest')) { const p = detectFvgInversionRetest(candles, snapshot, ctx.session, ctx.smartMoney); if (p) raw.push(p); }
 
   // OB Breaker Block / Nested OB — same family, built on smart-money.ts's
   // `breakerBlocks`/`orderBlocks` instead of FVGs.

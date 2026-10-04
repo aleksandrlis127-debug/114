@@ -54,6 +54,11 @@ export type PatternName =
   | 'fvg-breaker-block'
   | 'fvg-nested'
   | 'fvg-rejection'
+  // Три новых M1-входа на FVG (fvg-htf-mss.ts, fvg-sweep-return.ts,
+  // fvg-inversion-retest.ts) — альтернативные идеи входа, см. fvg-m1-entry-shared.ts.
+  | 'fvg-htf-mss'
+  | 'fvg-sweep-return'
+  | 'fvg-inversion-retest'
   // OB Breaker Block / Nested OB (order-block-breaker.ts, order-block-
   // nested.ts) — the Order Block counterparts of fvg-breaker-block/
   // fvg-nested above, built on smart-money.ts's `breakerBlocks`/
@@ -687,6 +692,9 @@ const PATTERN_NAMES: readonly PatternName[] = [
   'fvg-breaker-block',
   'fvg-nested',
   'fvg-rejection',
+  'fvg-htf-mss',
+  'fvg-sweep-return',
+  'fvg-inversion-retest',
   'order-block-breaker',
   'order-block-nested',
   // Additional patterns detected in patterns/index.ts — previously missing
@@ -804,6 +812,9 @@ export const patternNameSchema = z.enum([
   'fvg-breaker-block',
   'fvg-nested',
   'fvg-rejection',
+  'fvg-htf-mss',
+  'fvg-sweep-return',
+  'fvg-inversion-retest',
   'order-block-breaker',
   'order-block-nested',
   'inverted-hammer',

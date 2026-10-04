@@ -203,6 +203,28 @@ export const LOGIC_CHANGE_LOG: LogicChangeRecord[] = [
     ],
     frozenAtMs: Date.UTC(2026, 9, 4),
   },
+  {
+    id: 'fvg-m1-entry-ideas-20261004',
+    date: '2026-10-04',
+    description:
+      'Три альтернативные идеи входа на M1 для FVG (веса и пороги скоринга общие с fvg-return, не менялись): fvg-htf-mss (непробитый HTF-FVG + первый M1-слом структуры), fvg-sweep-return (снятие ликвидности + возврат в FVG, оставленный смещением после снятия), fvg-inversion-retest (первый ретест инверсного FVG). Регистрация: PatternName/PATTERN_NAMES/patternNameSchema, ALL_PATTERNS + миграция settingsStore v15, patterns/index.ts, pattern-categories, pattern-selection, signal-builder (стартовый бонус 0.4), HORIZON_GRIDS. OCCURRENCE_ALGORITHM_VERSION 17→18. Таблица горизонтов не перегенерирована: у новых паттернов нет записи до первого horizon-audit.',
+    filesChanged: [
+      'src/compute/patterns/fvg-m1-entry-shared.ts',
+      'src/compute/patterns/fvg-htf-mss.ts',
+      'src/compute/patterns/fvg-sweep-return.ts',
+      'src/compute/patterns/fvg-inversion-retest.ts',
+      'src/compute/patterns/fvg-nested.ts',
+      'src/compute/patterns/index.ts',
+      'src/types/domain.ts',
+      'src/stores/settingsStore.ts',
+      'src/lib/pattern-categories.ts',
+      'src/decision/pattern-selection.ts',
+      'src/decision/signal-builder.ts',
+      'backtest/horizon-audit.ts',
+      'backtest/audit-version.ts',
+    ],
+    frozenAtMs: Date.UTC(2026, 9, 4),
+  },
 ];
 
 /**
